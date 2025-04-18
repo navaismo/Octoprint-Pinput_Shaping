@@ -122,7 +122,7 @@ You can find the models in the STL folder along with the 3mf project:
 
 
 <div align="center">
-<a href=""><img src=" https://i.imgur.com/ahHgnOK.png" align="center" height="600" width="950" ></a>
+<a href=""><img src="https://i.imgur.com/ahHgnOK.png" align="center" height="600" width="950" ></a>
 </div>
 
 
@@ -312,7 +312,7 @@ Displays calculated results:
 
 ## License
 
-MIT © [@navaismo](https://github.com/navaismo)
+GPLv3 © [@navaismo](https://github.com/navaismo)
 
 ---
 
