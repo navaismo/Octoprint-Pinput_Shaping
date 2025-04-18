@@ -465,7 +465,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
         self._plugin_logger.info(f"Recommended command: {command}")
         self._plugin_logger.info(f"Input Shaping analysis completed.")
         self._plugin_manager.send_plugin_message(self._identifier, dict(type="close_popup"))
-        self._printer.commands(f"M117 Freq for {self.currentAxis}:{base_freq} Damp:{self._settings.get(['dampingRatio'])}")
+        self._printer.commands(f"M117 Freq for {self.currentAxis}:{base_freq:2f} Damp:{self._settings.get(['dampingRatio'])}")
         self._plugin_manager.send_plugin_message(self._identifier, {
             "type": "results_ready",
             "msg": "Input Shaping analysis completed",
