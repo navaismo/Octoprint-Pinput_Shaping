@@ -1,0 +1,4 @@
+include README.md
+recursive-include octoprint_Pinput_Shaping/templates *
+recursive-include octoprint_Pinput_Shaping/translations *
+recursive-include octoprint_Pinput_Shaping/static *

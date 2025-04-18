@@ -1,0 +1,169 @@
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+
+<style>
+  .settings-container {
+    font-family: Arial, sans-serif;
+    max-width: 650px;
+    margin: auto;
+    padding: 25px;
+    border-radius: 12px;
+    background-color: #2c2f36;
+    color: white;
+    box-shadow: 0 0 12px rgba(0, 0, 0, 0.3);
+  }
+
+  .setting-group {
+    margin-bottom: 30px;
+    border: 1px solid #444;
+    padding: 20px;
+    border-radius: 10px;
+    background-color: #36393f;
+  }
+
+  .setting-title {
+    font-size: 1.3em;
+    font-weight: bold;
+    margin-bottom: 15px;
+    text-align: center;
+    color: #f1f1f1;
+  }
+
+  .form-inline-group {
+    display: flex;
+    justify-content: space-around;
+    align-items: center;
+    flex-wrap: wrap;
+    margin-bottom: 15px;
+  }
+
+  .form-inline-item {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    margin: 10px;
+    text-align: center;
+  }
+
+  .form-inline-item input,
+  .form-inline-item select {
+    width: 100px;
+    text-align: center;
+    font-size: 14px;
+    background-color: #222;
+    border: 1px solid #777;
+    color: white;
+    border-radius: 5px;
+    padding: 5px;
+    -moz-appearance: textfield;
+  }
+
+  /* Remove number spinner arrows */
+  input[type=number]::-webkit-inner-spin-button,
+  input[type=number]::-webkit-outer-spin-button {
+    -webkit-appearance: none;
+    margin: 0;
+  }
+
+  input[type=number] {
+    -moz-appearance: textfield;
+  }
+
+  .form-inline-item label {
+    font-size: 0.9em;
+    margin-bottom: 5px;
+    color: #ccc;
+  }
+
+  .form-inline-item i {
+    margin-left: 5px;
+    color: #888;
+    cursor: pointer;
+  }
+
+  .form-inline-item i:hover {
+    color: #fff;
+  }
+</style>
+
+<div id="settings_plugin_Pinput_Shaping" class="settings-container">
+
+  <!-- Section: Printer Size -->
+  <div class="setting-group">
+    <div class="setting-title">Printer Size</div>
+    <div class="form-inline-group">
+      <div class="form-inline-item">
+        <label for="volume_x">X (mm)
+          <i class="fas fa-info-circle" data-toggle="tooltip" title="Width of the printable area in millimeters."></i>
+        </label>
+        <input type="number" id="volume_x" data-bind="value: sizeX">
+      </div>
+
+      <div class="form-inline-item">
+        <label for="volume_y">Y (mm)
+          <i class="fas fa-info-circle" data-toggle="tooltip" title="Depth of the printable area in millimeters."></i>
+        </label>
+        <input type="number" id="volume_y" data-bind="value: sizeY">
+      </div>
+
+      <div class="form-inline-item">
+        <label for="volume_z">Z (mm)
+          <i class="fas fa-info-circle" data-toggle="tooltip" title="Height of the printable area in millimeters."></i>
+        </label>
+        <input type="number" id="volume_z" data-bind="value: sizeZ">
+      </div>
+    </div>
+  </div>
+
+  <!-- Section: Input Shaping -->
+  <div class="setting-group">
+    <div class="setting-title">Input Shaping Parameters</div>
+
+    <div class="form-inline-group">
+      <div class="form-inline-item">
+        <label for="accel_min">Min Accel (mm/s²)
+          <i class="fas fa-info-circle" data-toggle="tooltip" title="Minimum acceleration used during resonance testing."></i>
+        </label>
+        <input type="number" id="accel_min" data-bind="value: accelMin">
+      </div>
+
+      <div class="form-inline-item">
+        <label for="accel_max">Max Accel (mm/s²)
+          <i class="fas fa-info-circle" data-toggle="tooltip" title="Maximum acceleration used during resonance testing."></i>
+        </label>
+        <input type="number" id="accel_max" data-bind="value: accelMax">
+      </div>
+    </div>
+
+    <div class="form-inline-group">
+      <div class="form-inline-item">
+        <label for="freq_start">Start Freq (Hz)
+          <i class="fas fa-info-circle" data-toggle="tooltip" title="Start frequency for the input shaping sweep."></i>
+        </label>
+        <input type="number" id="freq_start" data-bind="value: freqStart">
+      </div>
+
+      <div class="form-inline-item">
+        <label for="freq_end">End Freq (Hz)
+          <i class="fas fa-info-circle" data-toggle="tooltip" title="End frequency for the input shaping sweep."></i>
+        </label>
+        <input type="number" id="freq_end" data-bind="value: freqEnd">
+      </div>
+    </div>
+
+    <div class="form-inline-group">
+      <div class="form-inline-item">
+        <label for="damping_ratio">Damping Ratio
+          <i class="fas fa-info-circle" data-toggle="tooltip" title="Select the damping ratio to control vibration suppression."></i>
+        </label>
+        <select id="damping_ratio" data-bind="value: dampingRatio">
+          <option value="0.05">0.05</option>
+          <option value="0.07">0.07</option>
+          <option value="0.1">0.1</option>
+          <option value="0.15">0.15</option>
+        </select>
+      </div>
+    </div>
+  </div>
+</div>
+<script src="{{ url_for("static", filename="js/lib/jquery/jquery.min.js") }}"></script>
+
