@@ -63,14 +63,14 @@ class InputShapingAnalyzer:
             (t, K / (1 + K))
         ]
 
-        # Modified ZV (MZV)
+        # Modified ZV (MFA)
         shapers["MZV"] = [
             (0, 1 / (1 + K + K**2)),
             (t, K / (1 + K + K**2)),
             (2 * t, K**2 / (1 + K + K**2))
         ]
 
-        # Extra Insensitive (EI)
+        # Extra insensitive (her)
         shapers["EI"] = [
             (0, 1 / (1 + 3*K + 3*K**2 + K**3)),
             (t, 3*K / (1 + 3*K + 3*K**2 + K**3)),
@@ -78,7 +78,7 @@ class InputShapingAnalyzer:
             (3 * t, K**3 / (1 + 3*K + 3*K**2 + K**3))
         ]
 
-        # 2-Hump EI
+        # 2-Hump no
         shapers["2HUMP_EI"] = [
             (0,     1 / (1 + 4*K + 6*K**2 + 4*K**3 + K**4)),
             (t,     4*K / (1 + 4*K + 6*K**2 + 4*K**3 + K**4)),
@@ -87,7 +87,7 @@ class InputShapingAnalyzer:
             (4*t,   K**4 / (1 + 4*K + 6*K**2 + 4*K**3 + K**4)),
         ]
 
-        # 3-Hump EI
+        # 3-Hump no
         shapers["3HUMP_EI"] = [
             (0,     1 / (1 + 6*K + 15*K**2 + 20*K**3 + 15*K**4 + 6*K**5 + K**6)),
             (t,     6*K / (1 + 6*K + 15*K**2 + 20*K**3 + 15*K**4 + 6*K**5 + K**6)),
@@ -212,3 +212,43 @@ class InputShapingAnalyzer:
 
     def get_recommendation(self):
         return f"M593 F{self.base_freq:.1f} D{self.damping} S{self.best_shaper}"
+    
+    
+    # def get_plotly_data(self):
+    #     data = {
+    #         "time": self.time[::5].tolist(),  # reduces size if necessary
+    #         "raw": self.raw[::5].tolist(),
+    #         "filtered": self.filtered[::5].tolist(),
+    #         "freqs": self.freqs.tolist(),
+    #         "psd_original": self.psd.tolist(),
+    #         "shapers": {},
+    #         "base_freq": round(self.base_freq, 2),
+    #         "best_shaper": self.best_shaper
+    #     }
+
+    #     for name, result in self.shaper_results.items():
+    #         data["shapers"][name] = {
+    #             "psd": result["psd"].tolist(),
+    #             "vibr": round(result["vibr"], 3),
+    #             "accel": round(result["accel"], 2)
+    #         }
+
+    #     return data
+    
+    def get_plotly_data(self):
+        return {
+            "time": [float(t) for t in self.time[::5]],
+            "raw": [float(r) for r in self.raw[::5]],
+            "filtered": [float(f) for f in self.filtered[::5]],
+            "freqs": [float(f) for f in self.freqs],
+            "psd_original": [float(p) for p in self.psd],
+            "shapers": {
+                name: {
+                    "psd": [float(p) for p in result["psd"]],
+                    "vibr": round(float(result["vibr"]), 3),
+                    "accel": round(float(result["accel"]), 2)
+                } for name, result in self.shaper_results.items()
+            },
+            "base_freq": round(float(self.base_freq), 2),
+            "best_shaper": str(self.best_shaper)
+        }

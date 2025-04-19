@@ -413,6 +413,68 @@ $(function () {
     self.onDataUpdaterPluginMessage = function (plugin, data) {
       if (plugin !== "Pinput_Shaping") return;
 
+      if (data.type === "plotly_data") {
+        // --- Clean up old plot ---
+        Plotly.purge('plot_signal');
+        Plotly.purge('plot_psd');
+    
+        // === SIGNAL GRAPH ===
+        const traceRaw = {
+          x: data.time,
+          y: data.raw,
+          mode: 'lines',
+          name: 'Raw',
+          line: { color: 'rgba(0,123,255,0.5)', width: 1.5 }
+        };
+    
+        const traceFiltered = {
+          x: data.time,
+          y: data.filtered,
+          mode: 'lines',
+          name: 'Filtered',
+          line: { color: 'orange', width: 2 }
+        };
+    
+        const layoutSignal = {
+          title: `Signal (Axis ${data.axis})`,
+          xaxis: { title: 'Time (s)' },
+          yaxis: { title: 'Acceleration (mm/s²)' },
+          margin: { t: 40 }
+        };
+    
+        Plotly.newPlot('plot_signal', [traceRaw, traceFiltered], layoutSignal, { responsive: true });
+    
+        // === PSD GRAPH ===
+        const psdTraces = [
+          {
+            x: data.freqs,
+            y: data.psd_original,
+            mode: 'lines',
+            name: 'Original PSD',
+            line: { color: 'black', width: 1.5 }
+          }
+        ];
+    
+        for (const [name, shaper] of Object.entries(data.shapers)) {
+          psdTraces.push({
+            x: data.freqs,
+            y: shaper.psd,
+            mode: 'lines',
+            name: `${name} (v=${shaper.vibr}, a=${shaper.accel})`,
+            line: { dash: 'dash', width: 1.2 }
+          });
+        }
+    
+        const layoutPSD = {
+          title: `PSD + Input Shapers (Axis ${data.axis})`,
+          xaxis: { title: 'Frequency (Hz)', range: [0, 200] },
+          yaxis: { title: 'Power Spectral Density' },
+          margin: { t: 40 }
+        };
+    
+        Plotly.newPlot('plot_psd', psdTraces, layoutPSD, { responsive: true });
+      }
+    
       
       if (data.type === "popup") {
         //console.log(">>> Showing popup with message:", data.message);

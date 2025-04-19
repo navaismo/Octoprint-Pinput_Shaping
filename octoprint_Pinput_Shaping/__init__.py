@@ -458,14 +458,15 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
         best_shaper = analyzer.analyze()
         signal_path, psd_path, shaper_results, best_shaper, base_freq = analyzer.generate_graphs()
         command = analyzer.get_recommendation()
-
+        data_for_plotly = analyzer.get_plotly_data()
+     
         self._plugin_logger.info(f"Best shaper for {self.currentAxis} axis: {best_shaper}")
         self._plugin_logger.info(f"Signal graph saved to: {signal_path}")
         self._plugin_logger.info(f"PSD graph saved to: {psd_path}")
         self._plugin_logger.info(f"Recommended command: {command}")
         self._plugin_logger.info(f"Input Shaping analysis completed.")
         self._plugin_manager.send_plugin_message(self._identifier, dict(type="close_popup"))
-        self._printer.commands(f"M117 Freq for {self.currentAxis}:{base_freq:2f} Damp:{self._settings.get(['dampingRatio'])}")
+        self._printer.commands(f"M117 Freq for {self.currentAxis}:{base_freq:.2f} Damp:{self._settings.get(['dampingRatio'])}")
         self._plugin_manager.send_plugin_message(self._identifier, {
             "type": "results_ready",
             "msg": "Input Shaping analysis completed",
@@ -478,11 +479,21 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
             "results": {
                 k: {
                     "vibr": float(v["vibr"]),
-                    "accel": float(v["accel"])
+                    "accel": float(v["accel"]),
                 } for k, v in shaper_results.items()
             },
             "base_freq": float(base_freq)
+            
         })
+        
+        data_for_plotly.update({
+            "type": "plotly_data",
+            "description": "Input Shaping Plotly Data",
+            "axis": self.currentAxis.upper()
+        })
+        #self._plugin_logger.info(f"Sending plotly data to frontend: {json.dumps(data_for_plotly)}")
+        self._plugin_manager.send_plugin_message(self._identifier, data_for_plotly)
+        
         
         return    
     
@@ -550,7 +561,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
 
 
 __plugin_pythoncompat__ = ">=3,<4"  # Only Python 3
-__plugin_version__ = "0.0.4.1"
+__plugin_version__ = "0.0.4.3"
 
 
 def __plugin_load__():

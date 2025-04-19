@@ -1,7 +1,7 @@
 <!-- Icons -->
 <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/bootstrap-icons/font/bootstrap-icons.css">
 <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
-
+<script src="https://cdn.plot.ly/plotly-3.0.1.min.js" charset="utf-8"></script>
 <style>
   .pinput-tab-container {
     max-width: 800px;
@@ -361,16 +361,27 @@
       </div>
     </div>
 
+
+    <div class="text-center">
+  <h6>Signal + Filtered</h6>
+  <div id="plot_signal" style="height: 350px;"></div>
+</div>
+
+<div class="text-center mt-4">
+  <h6>PSD + Shapers</h6>
+  <div id="plot_psd" style="height: 450px;"></div>
+</div>
+
     <!-- Signal Plot -->
     <div class="text-center mt-4">
-      <h6>Signal + Filter</h6>
+      <h6>PNG Signal + Filter</h6>
       <img data-bind="attr: { src: signalImgUrl }, click: function() { openImageModal(signalImgUrl()) }"
            class="img-fluid rounded mb-2" style="max-height: 250px; cursor: zoom-in;" />
     </div>
 
     <!-- PSD Plot -->
     <div class="text-center mt-4">
-      <h6>PSD + Shapers</h6>
+      <h6>PNG PSD + Shapers</h6>
       <img data-bind="attr: { src: psdImgUrl }, click: function() { openImageModal(psdImgUrl()) }"
            class="img-fluid rounded mb-2" style="max-height: 250px; cursor: zoom-in;" />
     </div>
