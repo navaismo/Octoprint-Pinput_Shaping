@@ -306,7 +306,12 @@ Displays calculated results:
 - `Set Frequency` and `Set Damping` buttons
 - Signal and PSD graphs (click to view fullscreen)
 
-![Results](https://i.imgur.com/RO1ANKL.png)
+![ResultsPNG](https://i.imgur.com/RO1ANKL.png)
+
+
+- Or explore with Plotly:
+
+![ResultsPlotly](https://i.imgur.com/IOc6M17.png)
 
 ---
 
