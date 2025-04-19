@@ -4,9 +4,15 @@
 ![Python](https://img.shields.io/badge/python-3.7+-blue?style=flat-square)
 ![OctoPrint](https://img.shields.io/badge/OctoPrint-Compatible-orange?style=flat-square)
 
-**Pinput Shaping** is a modern and responsive plugin for OctoPrint that enables full **Input Shaping** workflows for Marlin firmware users.
+**Pinput Shaping** is a responsive plugin for OctoPrint that enables  **Input Shaping** workflows for Marlin firmware users.
 
 It lets you run automated resonance tests, analyze acceleration data with PSD + filtering, and generate ready-to-send `M593` commands—all within the OctoPrint interface.
+
+<br>
+<div align="center">
+   <img src="https://i.imgur.com/l2Y03AS.png" width="60%" height="60%"/>      
+</div>
+<br>
 
 ---
 
