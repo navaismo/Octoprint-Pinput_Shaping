@@ -110,7 +110,7 @@ Source: https://www.reddit.com/r/klippers/comments/1e5ocz5/guide_hooking_up_your
 </div>
 
 <br>
-6.- To Hold the sensor into the Head and Bed you can use your preffered 3D Models, for my Ender 3 V3 SE I use models this models:
+6.- To Hold the sensor into the Head and Bed you can use your preffered 3D Models, for my Ender 3 V3 SE I use this models:
 
 * Head Bracket: https://www.printables.com/model/919687-g-sensor-bracket-for-ender3-v3-se/files
 
