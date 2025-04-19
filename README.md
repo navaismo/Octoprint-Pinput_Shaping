@@ -243,7 +243,7 @@ Done
 
 # Plugin Installation
 
-1. Download the `.zip` from [Releases](https://github.com/yourrepo/releases)
+1. Download the `.zip` from [Releases](https://github.com/navaismo/Octoprint-Pinput_Shaping/releases)
 2. Go to OctoPrint → Plugin Manager → Install from file
 
 ---
