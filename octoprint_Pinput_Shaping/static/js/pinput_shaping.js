@@ -198,7 +198,7 @@ $(function () {
 
     self.sendFreqGcode = function () {
       const axis = self.bestShaperAxis().toUpperCase();
-      const freq = parseFloat(self.baseFreq()).toFixed(1);
+      const freq = parseFloat(self.baseFreq()).toFixed(2);
       const gcode = `M593 ${axis} F${freq}`;
     
       if (confirm(`Send to printer?\n\n${gcode}`)) {
