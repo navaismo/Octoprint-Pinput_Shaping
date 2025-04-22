@@ -53,6 +53,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
         self._adchild_logfile = None
         self._adchild_logfilename = None
         self.currentAxis = None
+        self.shapers = None
 
         self._plugin_logger = logging.getLogger(
             "octoprint.plugins.Pinput_Shaping")
@@ -195,6 +196,9 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
         self._plugin_logger.info(f"Frequency end: {self._settings.get(['freqEnd'])}")
         self._plugin_logger.info(f"Damping ratio: {self._settings.get(['dampingRatio'])}")
         try:
+            self._plugin_logger.info("Backing up current shaper values...")
+            self._printer.commands("M593")
+            time.sleep(2)
             self.csv_filename = os.path.join(self.metadata_dir, "adxl_test_capture.csv")
             log_filename = os.path.join(self.metadata_dir, "adxl_output.log")
 
@@ -234,6 +238,8 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
 
             self._plugin_logger.info(f"ADXL345 test completed. Summary: {summary_line}")
             self._plugin_manager.send_plugin_message(self._identifier, dict(type="close_popup"))
+            self.restore_shapers()
+            self._plugin_logger.info("Restored shaper values to printer.")
             return {
                 "success": True,
                 "summary": summary_line,
@@ -295,8 +301,11 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
 
         if printer_status == "OPERATIONAL":
             self._plugin_logger.info("Printer is idle. Proceeding with resonance test.")
-            self._plugin_logger.info("Sending resonance test commands to printer...")
             self.adxl_capture_active = True
+            self._plugin_logger.info("Backing up current shaper values...")
+            self._printer.commands("M593")
+            time.sleep(2)
+            self._plugin_logger.info("Sending resonance test commands to printer...")
             self.home_and_park(x, y, z)
             self._printer.commands(self.precompute_sweep(axis, x, y, z))
             return {
@@ -413,7 +422,39 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
     
     
     def gcode_received_handler(self, comm, line, *args, **kwargs):
-        if "Resonance Test complete" in line:
+        
+        
+        
+        if "Input Shaping:" in line:
+            self._plugin_logger.info("Detected Input Shaping message")
+            self.getM593 = True
+            self.shapers = {}
+            
+        # Extract the shaper values from the line
+        match_x = re.match(r".*M593 X F([\d.]+) D([\d.]+)", line)
+        match_y = re.match(r".*M593 Y F([\d.]+) D([\d.]+)", line)
+
+        if match_x and self.getM593:
+            self._plugin_logger.info("Detected M593 X value")
+            self.shapers["X"] = {
+                "F": float(match_x.group(1)),
+                "D": float(match_x.group(2))
+            }
+        if match_y and self.getM593:
+            self._plugin_logger.info("Detected M593 Y value")
+            self.shapers["Y"] = {
+                "F": float(match_y.group(1)),
+                "D": float(match_y.group(2))
+            }
+            # Save to file
+            shaper_bck_path = os.path.join(self.metadata_dir, "current_shaper_values.json")
+            with open(shaper_bck_path, "w") as f:
+                json.dump(self.shapers, f)
+            self._plugin_logger.info(f"Shaper backup saved: {self.shapers}")
+            self.getM593 = False
+                    
+        
+        elif "Resonance Test complete" in line:
             self._plugin_logger.info("Detected M117 Resonance Test complete message")
             self._plugin_logger.info(f"Resonance Test complete for {self.currentAxis} axis")
             self._plugin_logger.info("Stopping ADXL345 capture...")
@@ -439,6 +480,24 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
         return line    
     
     
+    
+    def restore_shapers(self):
+        backup_path = os.path.join(self.metadata_dir, "current_shaper_values.json")
+        if not os.path.exists(backup_path):
+            self._plugin_logger.warning("No saved shaper settings found to restore.")
+            return
+
+        with open(backup_path, "r") as f:
+            shapers = json.load(f)
+
+        for axis, settings in shapers.items():
+            freq = settings.get("F")
+            damp = settings.get("D")
+            if freq is not None and damp is not None:
+                cmd = f"M593 {axis} F{freq:.2f} D{damp} "
+                self._printer.commands(cmd)
+                self._plugin_logger.info(f"Restored: {cmd}")
+        
     
     def get_input_shaping_results(self):
         self._plugin_logger.info(f"Getting Input Shaping results for {self.currentAxis} Axis...")
@@ -493,6 +552,8 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
         })
         #self._plugin_logger.info(f"Sending plotly data to frontend: {json.dumps(data_for_plotly)}")
         self._plugin_manager.send_plugin_message(self._identifier, data_for_plotly)
+        self.restore_shapers()
+        self._plugin_logger.info("Restored shaper values to printer.")
         
         
         return    
