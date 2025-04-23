@@ -250,7 +250,9 @@ Done
 # Marlin setup
 
 1.- Your printer must support M117 commands since it are used to control the flow of the Resonance Test.
+
 2.- For the Ender3 V3 SE you can use the [community firmware here](https://github.com/navaismo/Ender-3V3-SE)
+
 3.- If you are using Octoprint along my [E3v3SE Plugin](https://github.com/navaismo/OctoPrint-E3v3seprintjobdetails), please update the plugin to the version >0.2.4 so the M117 commands for the shaping plugin are allowed.
 
 
