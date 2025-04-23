@@ -298,7 +298,7 @@ An expected values when the sensor is laying normal are:
     
     Z values near 1
 
-If you tilt the sensor to the corresponding AXIS then the corresponding AIS must show values near 1.
+If you tilt the sensor to the corresponding AXIS then the corresponding AXIS must show values near 1.
 
 ---
 
