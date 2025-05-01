@@ -141,6 +141,8 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
         # Create the directory if it doesn't exist
         os.makedirs(self.metadata_dir, exist_ok=True)
         os.chmod(self.metadata_dir, 0o775)
+        os.makedirs(self.graphs_dir, exist_ok=True)
+        os.chmod(self.graphs_dir, 0o775)
 
         self._plugin_logger.info(
             f">>>>>> PInput-Shaping Metadata directory initialized: {self.metadata_dir}")
@@ -622,7 +624,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
 
 
 __plugin_pythoncompat__ = ">=3,<4"  # Only Python 3
-__plugin_version__ = "0.0.4.3"
+__plugin_version__ = "0.0.4.4"
 
 
 def __plugin_load__():
