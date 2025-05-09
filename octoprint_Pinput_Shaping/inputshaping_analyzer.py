@@ -110,7 +110,7 @@ class InputShapingAnalyzer:
         return shaped
 
     def compute_psd(self, signal: np.ndarray):
-        """Welch adaptativo que garantiza no exceder el límite de 2 GiB."""
+        # Adaptive Welch that guarantees not exceeding the limit of 2 gib.
         sig = signal.astype(np.float32, copy=False)
 
         # starting point

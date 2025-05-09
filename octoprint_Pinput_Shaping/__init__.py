@@ -54,6 +54,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
         self._adchild_logfilename = None
         self.currentAxis = None
         self.shapers = None
+        self.getM593 = False
 
         self._plugin_logger = logging.getLogger(
             "octoprint.plugins.Pinput_Shaping")
@@ -624,7 +625,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
 
 
 __plugin_pythoncompat__ = ">=3,<4"  # Only Python 3
-__plugin_version__ = "0.0.4.4"
+__plugin_version__ = "0.0.4.5"
 
 
 def __plugin_load__():

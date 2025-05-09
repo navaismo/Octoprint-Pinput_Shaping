@@ -10,7 +10,7 @@ step() {
     ((CURRENT++))
 }
 
-# Paso 1: Enable SPI
+# Step 1: Enable SPI
 step "Enable SPI"
 sudo sed -i \
     -e 's/^#\?dtparam=spi=.*/dtparam=spi=on/' \
@@ -18,12 +18,12 @@ sudo sed -i \
 sudo grep -q '^dtparam=spi=on' /boot/config.txt ||
     echo 'dtparam=spi=on' | sudo tee -a /boot/config.txt
 
-# Paso 2: Installing Deps
+# Step 2: Installing Deps
 step "Installing Deps"
 sudo apt-get update
 sudo apt-get install -y build-essential make gcc git pigpio python3-pigpio libopenblas-dev
 
-# Paso 3: installing ADXL345SPI Tool (workaround para git como root)
+# Step 3: installing ADXL345SPI Tool (workaround para git como root)
 step "Installing ADXL345SPI Tool"
 
 # We detect the real user (for when the script is executed with Sudo)

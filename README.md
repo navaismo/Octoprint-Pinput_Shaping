@@ -149,7 +149,22 @@ You can find the models in the STL folder along with the 3mf project:
 </div>
 
 
+<br>
 
+# GY-291 ADXL345 Variant.
+
+The [GY-291](https://es.aliexpress.com/item/1005008142481700.html) has:
+```
+* A 10kΩ resistor connected between CS and VCC (3.3V).
+* That means that the CS pin is always HIGH by default → forced I2C mode.
+* Even if in your sketch you lower CS to LOW, the resistor pulls to HIGH, that's why the ADXL345 never switches to SPI mode.
+
+To make work the SPI mode you need to remove the resistor.
+```
+
+#### Source: @jusebago user reported the solution in the [Octoprint Forum](https://community.octoprint.org/t/octoprint-pinput-shaping-a-plugin-to-test-input-shaping-with-marlin/63089/10)
+
+<br>
 
 # Automatic Dependencies installation
 SSH into your Raspberry Pi save and run the script located in the bash folder:
@@ -254,6 +269,8 @@ Done
 2.- For the Ender3 V3 SE you can use the [community firmware here](https://github.com/navaismo/Ender-3V3-SE)
 
 3.- If you are using Octoprint along my [E3v3SE Plugin](https://github.com/navaismo/OctoPrint-E3v3seprintjobdetails), please update the plugin to the version >0.2.4 so the M117 commands for the shaping plugin are allowed.
+
+4.- Your Marlin Version need to Suppor `HOST_ACTION_COMMANDS`
 
 
 # Plugin Installation
