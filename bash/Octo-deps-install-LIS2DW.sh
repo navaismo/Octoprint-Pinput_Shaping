@@ -30,7 +30,7 @@ else
     git clone https://github.com/navaismo/lis2dwusb.git
 fi
 
-cd lis2dwusb
+cd lis2dwusb/Linux_Wrapper
 sudo make
 sudo make install
 
