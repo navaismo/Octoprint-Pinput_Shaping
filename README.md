@@ -73,7 +73,18 @@ Each is ranked based on:
 
 ---
 
-## Hardware Setup
+## Accelerometer Supported
+| Brand       | Model                  |
+|-------------|------------------------|
+| Creality    | [ADXL345 SPI](https://es.aliexpress.com/item/1005007493583778.html)            |
+| BigTreeTech | [BTT-ADXL345](https://es.aliexpress.com/item/1005007518562508.html)            |
+| BigTreeTech | [BTT-S2DW](https://es.aliexpress.com/item/1005007518562508.html)      |
+| Mellow Fly  | [Fly-ADXL345](https://es.aliexpress.com/item/1005008779305652.html)           |
+
+<br><br>
+# Hardware Setup
+
+## ADXL345-SPI
 1.- Get any ADXL345 model that you like. In my case I bought it in [AliExpress](https://es.aliexpress.com/item/1005007493583778.html) the one with USB C termination.
 
 2.- The pinout of the sensor is:
@@ -113,11 +124,11 @@ Source: https://www.reddit.com/r/klippers/comments/1e5ocz5/guide_hooking_up_your
 
 5.- Connect the Sensor to the Raspberri Pi following the Diagram below:
 <div align="center">
-<a href=""><img src="https://i.imgur.com/bEIpB2E.png align="center"  ></a>
+<a href=""><img src="https://i.imgur.com/bEIpB2E.png" align="center"  ></a>
 </div>
 
 <br>
-6.- To Hold the sensor into the Head and Bed you can use your preffered 3D Models, for my Ender 3 V3 SE I use this models:
+6.- To Hold the sensor into the Head and Bed you can use your preffered 3D Models, for my Ender 3 V3 SE I use these models:
 
 * Head Bracket: https://www.printables.com/model/919687-g-sensor-bracket-for-ender3-v3-se/files
 
@@ -151,7 +162,7 @@ You can find the models in the STL folder along with the 3mf project:
 
 <br>
 
-# GY-291 ADXL345 Variant.
+## GY-291 ADXL345 Variant.
 
 The [GY-291](https://es.aliexpress.com/item/1005008142481700.html) has:
 ```
@@ -166,86 +177,14 @@ To make work the SPI mode you need to remove the resistor.
 
 <br>
 
-# Automatic Dependencies installation
-SSH into your Raspberry Pi save and run the script located in the bash folder:
+### Wrapper Automatic Dependencies installation
+SSH into your Raspberry Pi save and run the script `Octo-deps-install-ADXLSPI.sh` located in the bash folder:
 
 ```bash
-sudo bash Octo-deps-install.sh
+sudo bash Octo-deps-install-ADXLSPI.sh
 ```
 
-If you installed from the script skip to plugin configuration section.
-
-
-# Manual Dependencies Installation:
-## Enable SPI support in your Raspberry-Pi
-
-SSH into your Raspberry Pi and run:
-
-```bash
-sudo raspi-config
-```
-> - [X] Select Interface Options and press Enter
-
-
-<div align="center">
-<a href=""><img src="https://i.imgur.com/09sAjHJ.png" align="center"  ></a>
-</div>
-
-> - [X] Select SPI and press Enter
-
-<div align="center">
-<a href=""><img src="https://i.imgur.com/pvpe6p0.png" align="center"  ></a>
-</div>
-
-
-> - [X] Click on yes.
-
-<div align="center">
-<a href=""><img src="https://i.imgur.com/X7MktXA.png" align="center"  ></a>
-</div>
-
-Reboot your system
-```bash
-sudo reboot
-```
-
-## Linux System PreRequistes Installation
-Before installing the plugin you  **_MUST_** login into your RPi through SSH and run the following:
-
-1.- Update the system.
-```sh
-sudo apt-get update
-```
-2.- Install Dependencies,
-```bash
-sudo apt-get install build-essential make gcc git pigpio python3-pigpio libopenblas-dev
-```
-3.- Create tmp Dir
-```bash
-mkdir ADXLTool
-cd ADXLTool
-```
-4.- The Plugin uses the ADXL345SPI Tool created by [nagimov](https://github.com/nagimov), I made a fork to adapt it for the plugin so you need to clone my fork.
-```bash
-git clone https://github.com/navaismo/adxl345spi.git
-```
-
-5.- Install the ADXL utility.
-```bash
-cd adxl345spi
-
-sudo make
-
-sudo make install
-```
-
-6.- Make Octoprint able to run the tool without prompting the password.
-```bash
-echo -e "octoprint ALL=(ALL) NOPASSWD: $(which adxl345spi) \n$(whoami) ALL=(ALL) NOPASSWD: $(which adxl345spi)" | sudo tee /etc/sudoers.d/octoprint_adxl
-
-```
-
-7.- Veryfy that yo can read values from the Sensor
+Veryfy that yo can read values from the Sensor
 ```bash
 sudo adxl345spi -f 5
 ```
@@ -258,8 +197,120 @@ time = 0.400, x = -0.047, y = 0.055, z = 1.000
 time = 0.600, x = 0.000, y = 0.039, z = 1.008
 time = 0.801, x = -0.070, y = 0.094, z = 1.023
 5 samples read in 1.04 seconds with sampling rate 4.8 Hz
-Done
 ```
+<br>
+
+
+## BTT-ADXL345-USB, Mellow Fly-ADXL345USB(and maybe others ADXL based RPi2040)
+
+Thanks to user [@thosoo](https://github.com/thosoo/) for ceating the Firmware for the RPI2040 and the wrapper to work with the varianst of the USB ADXL345 connected to a RPi2040.
+You can download [from his repo](https://github.com/thosoo/adxl345usb), or from the folder `FW_RPi2040` the uf2 file and do the following to install into your Device:
+
+  - Hold the `BOOT` button from the board.
+  - Connect the Board to your machine while keeping pressing the `BOOT` button.
+  - Wait for your computer to show the new Storage Device and release the button.
+  - Mount and Open the Device.
+  - Copy the Downloaded `Firmware.uf2` file (Or your complied version `Firmware.uf2`) to the Device.
+  - When it finish the copy the device will unmount automatically, means the RPi2040 is rebooting.
+  - Disconnect the Device from your computer.
+  - Connect the device to your Raspberry Pi Running Octoprint(or the device running Octorpint).
+
+### Wrapper Automatic Dependencies installation
+SSH into your Raspberry Pi save and run the script `Octo-deps-install-ADXLUSB.sh` located in the bash folder:
+
+```bash
+sudo bash Octo-deps-install-ADXLUSB.sh
+```
+
+Veryfy that yo can read values from the Sensor
+```bash
+sudo adxl345spi -f 5
+```
+Output:
+```bash
+Press Q to stop
+time = 0.000, x = -0.016, y = 0.039, z = 1.008
+time = 0.200, x = 0.000, y = 0.039, z = 0.969
+time = 0.400, x = -0.047, y = 0.055, z = 1.000
+time = 0.600, x = 0.000, y = 0.039, z = 1.008
+time = 0.801, x = -0.070, y = 0.094, z = 1.023
+5 samples read in 1.04 seconds with sampling rate 4.8 Hz
+```
+
+<br>
+
+## BTT-LIS2DW-USB
+
+To Hold the sensor into the Head and Bed you can use your preffered 3D Models, for my Ender 3 V3 SE I use these models:
+
+* Modified LIS2DW Case: https://www.printables.com/model/1049353-btt-s2dwadxl345-case/files
+
+<div align="center">
+<a href=""><img src="https://i.imgur.com/mTbA7Zi.jpeg" align="center" height="500" width="500" ></a>
+</div>
+
+<br>
+
+* LIS2DW No Screw Cover: https://www.printables.com/model/1167157-no-screws-cover-for-btt-s2dwadxl345-case/files
+
+<div align="center">
+<a href=""><img src="https://i.imgur.com/YPdhww0.jpeg" align="center" height="500" width="500" ></a>
+</div>
+You can find the models in the STL folder along with the 3mf project:
+
+<br>
+Place the sensor in the Head.
+<div align="center">
+<a href=""><img src="https://i.imgur.com/8meDWeg.jpeg" align="center" height="500" width="500" ></a>
+</div>
+
+
+Place in the Bed.
+
+<div align="center">
+<a href=""><img src="https://i.imgur.com/M2C4flF.jpeg" align="center" height="500" width="500" ></a>
+</div>
+
+<br>
+
+You can download from my [LIS2DWUSB repo](https://github.com/navaismo/lis2dwusb), or from the folder `FW_RPi2040` the uf2 file and do the following to install into your Device:
+
+  - Hold the `BOOT` button from the board.
+  - Connect the Board to your machine while keeping pressing the `BOOT` button.
+  - Wait for your computer to show the new Storage Device and release the button.
+  - Mount and Open the Device.
+  - Copy the Downloaded `Firmware.uf2` file (Or your complied version `Firmware.uf2`) to the Device.
+  - When it finish the copy the device will unmount automatically, means the RPi2040 is rebooting.
+  - Disconnect the Device from your computer.
+  - Connect the device to your Raspberry Pi Running Octoprint(or the device running Octorpint).
+
+### Wrapper Automatic Dependencies installation
+SSH into your Raspberry Pi save and run the script `Octo-deps-install-LIS2DW.sh` located in the bash folder:
+
+```bash
+sudo bash Octo-deps-install-LIS2DW.sh
+```
+
+Veryfy that yo can read values from the Sensor
+```bash
+sudo lis2dwusb -f 200
+```
+Output:
+```bash
+Press Q to stop
+time = 0.001, x = -0.029, y = -0.167, z = 1.073
+time = 0.004, x = -0.034, y = -0.166, z = 1.064
+time = 0.009, x = -0.030, y = -0.165, z = 1.069
+...
+time = 0.215, x = -0.029, y = -0.174, z = 1.068
+time = 0.219, x = -0.031, y = -0.162, z = 1.051
+time = 0.224, x = -0.032, y = -0.166, z = 1.025
+time = 0.229, x = -0.029, y = -0.167, z = 1.029
+Captured 47 samples in 0.23 s = 204.8 Hz
+```
+
+<br><br>
+
 
 
 # Marlin setup
@@ -272,6 +323,7 @@ Done
 
 4.- Your Marlin Version need to Suppor `HOST_ACTION_COMMANDS`
 
+<br><br>
 
 # Plugin Installation
 
@@ -291,9 +343,16 @@ Open Settings → **Pinput Shaping** and configure:
 
 ![Config](https://i.imgur.com/OTCzcUP.png)
 
+
+<br>
+
+- Select Your Sensor Type
+
+![Stype](https://i.imgur.com/6JnIO37.png)
 ---
 
 ## Plugin Usage
+
 
 ### Hardware Checks Section
 
@@ -356,4 +415,5 @@ GPLv3 © [@navaismo](https://github.com/navaismo)
 ## Acknowledgments
 
 - Based on [`adxl345spi`](https://github.com/nagimov/adxl345spi) by [@nagimov](https://github.com/nagimov)
+- Thansk to [@thosoo](https://github.com/thosoo/) for ceating the Firmware for the RPI2040 and the wrapper to work with the varianst of the USB ADXL345. 
 - Inspired by Klipper's input shaping approach

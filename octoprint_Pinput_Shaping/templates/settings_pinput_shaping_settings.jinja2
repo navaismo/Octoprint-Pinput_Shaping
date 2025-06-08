@@ -164,6 +164,36 @@
       </div>
     </div>
   </div>
+
+  <!-- Section: Sensor type -->
+  <div class="setting-group">
+    <div class="setting-title">Select Accelerometer Type</div>
+    <div class="form-inline-group">
+      <div class="form-inline-item">
+        <label for="adxlspi">ADXL345-SPI
+          <i class="fas fa-info-circle" data-toggle="tooltip" title="SPI ADXL345, like Creality ones."></i>
+        </label>
+        <input type="radio" name="sensorType" id="adxlspi" data-bind="checked: sensorType" value="adxlspi" checked>
+      </div>
+
+      <div class="form-inline-item">
+        <label for="adxlusb">ADXL345-USB
+          <i class="fas fa-info-circle" data-toggle="tooltip" title="USB ADXL345, like BTT-ADXL345 or Fly-ADXL345."></i>
+        </label>
+        <input type="radio" name="sensorType" id="adxlusb" data-bind="checked: sensorType" value="adxlusb">
+      </div>
+
+      <div class="form-inline-item">
+        <label for="lis2dw">LIS2DW-USB
+          <i class="fas fa-info-circle" data-toggle="tooltip" title="USB LIS2DW, like BTT-LIS2DW."></i>
+        </label>
+        <input type="radio" name="sensorType" id="lis2dw" data-bind="checked: sensorType" value="lis2dw">
+      </div>
+    </div>
+  </div>
+
+
+
 </div>
 <script src="{{ url_for("static", filename="js/lib/jquery/jquery.min.js") }}"></script>
 

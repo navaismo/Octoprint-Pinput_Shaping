@@ -93,7 +93,8 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
             "accelMax": 2500,
             "freqStart": 5,
             "freqEnd": 132,
-            "dampingRatio": "0.05"
+            "dampingRatio": "0.05",
+            "sensorType": "adxl345spi"  
         }    
 
 
@@ -128,6 +129,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
         self._plugin_logger.info(f"Frequency start: {self._settings.get(['freqStart'])}")
         self._plugin_logger.info(f"Frequency end: {self._settings.get(['freqEnd'])}")
         self._plugin_logger.info(f"Damping ratio: {self._settings.get(['dampingRatio'])}")
+        self._plugin_logger.info(f"Sensor type: {self._settings.get(['sensorType'])}")
         
         self._plugin_manager.send_plugin_message(self._identifier, {"msg": "Pinput Shaping Plugin loaded"})
 
@@ -198,6 +200,8 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
         self._plugin_logger.info(f"Frequency start: {self._settings.get(['freqStart'])}")
         self._plugin_logger.info(f"Frequency end: {self._settings.get(['freqEnd'])}")
         self._plugin_logger.info(f"Damping ratio: {self._settings.get(['dampingRatio'])}")
+        self._plugin_logger.info(f"Sensor type: {self._settings.get(['sensorType'])}")
+        
         try:
             self._plugin_logger.info("Backing up current shaper values...")
             self._printer.commands("M593")
@@ -564,8 +568,23 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
     
    
     def _start_adxl_capture(self, freq=3200):
-        self._plugin_logger.info("Starting ADXL345 capture...")
-        cmd = f"sudo adxl345spi -f {freq} -s {self.csv_filename}"
+        wrapper = None
+        
+        if  (self._settings.get(['sensorType']) == 'lis2dw'):
+            self._plugin_logger.info("Starting LIS2DW capture...")
+            wrapper = "lis2dwusb"
+            if freq == 5:
+                self._plugin_logger.warning("LIS2DW sensor does not support 5Hz frequency. Test will run at minimum 200Hz.")
+                freq = 200
+            else:
+                self._plugin_logger.info(f"LIS2DW sensor does not support frequency {freq}Hz. Test will run at max 1600Hz.")
+                freq = 1600    
+        else:
+            self._plugin_logger.info("Starting ADXL345 capture...")
+            wrapper = "adxl345spi"
+        
+        
+        cmd = f"sudo {wrapper} -f {freq} -s {self.csv_filename}"
         logfile_path = os.path.join(os.path.dirname(self.csv_filename), "adxl_output.log")
         
         try:
@@ -625,7 +644,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
 
 
 __plugin_pythoncompat__ = ">=3,<4"  # Only Python 3
-__plugin_version__ = "0.0.4.5"
+__plugin_version__ = "0.0.4.6"
 
 
 def __plugin_load__():

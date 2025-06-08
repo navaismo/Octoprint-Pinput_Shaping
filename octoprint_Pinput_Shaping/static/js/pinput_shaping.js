@@ -19,6 +19,7 @@ $(function () {
     self.freqStart = ko.observable(0);
     self.freqEnd = ko.observable(0);
     self.dampingRatio = ko.observable("");
+    self.sensorType = ko.observable("");
 
     // Save settings before save
     self.onSettingsBeforeSave = function () {
@@ -31,6 +32,7 @@ $(function () {
       s.freqStart(self.freqStart());
       s.freqEnd(self.freqEnd());
       s.dampingRatio(self.dampingRatio());
+      s.sensorType(self.sensorType());
     };
 
     // On startup
@@ -49,6 +51,7 @@ $(function () {
       self.freqStart(s.freqStart());
       self.freqEnd(s.freqEnd());
       self.dampingRatio(s.dampingRatio());
+      self.sensorType(s.sensorType());
 
       const profile = self.settingsViewModel.printerProfiles.currentProfileData;
       if (profile && profile.volume) {
