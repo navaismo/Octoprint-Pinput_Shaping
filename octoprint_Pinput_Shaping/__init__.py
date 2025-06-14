@@ -85,10 +85,14 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
     
                
     def get_settings_defaults(self):
+        printer_profile = self._printer_profile_manager.get_current_or_default()
+        width = printer_profile['volume']['width']
+        depth = printer_profile['volume']['depth']
+        height = printer_profile['volume']['height']
         return {
-            "sizeX": 220,
-            "sizeY": 220,
-            "sizeZ": 250,
+            "sizeX": width,
+            "sizeY": depth,
+            "sizeZ": height,
             "accelMin": 300,
             "accelMax": 2500,
             "freqStart": 5,
