@@ -94,7 +94,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
             "freqStart": 5,
             "freqEnd": 132,
             "dampingRatio": "0.05",
-            "sensorType": "adxl345spi"  
+            "sensorType": "adxlspi"  
         }    
 
 
