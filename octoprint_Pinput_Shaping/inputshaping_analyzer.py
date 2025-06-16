@@ -48,7 +48,12 @@ class InputShapingAnalyzer:
 
     def lowpass_filter(self, data, order=4):
         nyq = 0.5 * self.sampling_rate
-        norm_cutoff = self.cutoff_freq / nyq
+        cutoff = min(self.cutoff_freq, nyq * 0.99)
+        norm_cutoff = cutoff / nyq
+        self._plugin_logger.info(f"lowpass_filter: cutoff={cutoff}, nyq={nyq}, norm_cutoff={norm_cutoff}, sampling_rate={self.sampling_rate}")
+        if not (0 < norm_cutoff < 1):
+            self._plugin_logger.error(f"Invalid norm_cutoff: {norm_cutoff} (cutoff={cutoff}, nyq={nyq})")
+            raise ValueError(f"Digital filter critical frequencies must be 0 < Wn < 1 (got {norm_cutoff}, cutoff={cutoff}, nyq={nyq})")
         b, a = butter(order, norm_cutoff, btype='low')
         return filtfilt(b, a, data)
 
@@ -133,7 +138,11 @@ class InputShapingAnalyzer:
     
     def analyze(self):
         self.load_data()
-        self.filtered = self.lowpass_filter(self.raw)
+        try:
+            self.filtered = self.lowpass_filter(self.raw)
+        except ValueError as e:
+            self._plugin_logger.error(f"Lowpass filter failed: {e}")
+            raise
         self.freqs, self.psd = self.compute_psd(self.filtered)
 
         freq_range = (self.freqs > 20) & (self.freqs < 80)
