@@ -318,7 +318,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
             time.sleep(2)
             self._plugin_logger.info("Sending resonance test commands to printer...")
             self.home_and_park(x, y, z)
-            self._printer.commands(self.precompute_sweep(axis, x, y, z))
+            self._printer.commands(self.precompute_sweep(axis, x, y))
             return {
                 "success": True,
                 "summary": f"Resonance test for {axis} triggered successfully."
@@ -347,33 +347,29 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
         for pos in positions:
             commands.append("G0 {}{} F{}".format(axis, pos, 60 *self.ACCELERATION))
         
-        commands.append(f"M117 Finish Test Sweep on {axis}-Axis")    
-        
+        commands.append(f"M117 Finish Test Sweep on {axis}-Axis")
+
         return commands
 
-    
-        
-    # Precompute the resonance test commands    
-    def precompute_sweep(self, axis, x, y, z):
+    # Precompute the resonance test commands
+    def precompute_sweep(self, axis, x, y):
         num_cycles = 800
         steps_per_cycle = 4
-        
+
         amplitude = 5
         min_amp = 1
         self.currentAxis = axis
-        
+
         accel_min = int(self._settings.get(["accelMin"]))
         accel_max = int(self._settings.get(["accelMax"]))
         freq_start = float(self._settings.get(["freqStart"]))
         freq_end = float(self._settings.get(["freqEnd"]))
-        
-    
+
         freqs = np.linspace(freq_start, freq_end, num_cycles)
         amplitudes = np.linspace(amplitude, min_amp, num_cycles)
         accelerations = np.linspace(accel_min, accel_max, num_cycles)
         feedrates = np.clip(100 * accelerations, 2000, 15000)
-        
-      
+
         commands = []
         commands.append("M117 Starting resonance test")
         commands.append("M117 ADXL|ON")
@@ -398,16 +394,19 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
 
             for j in range(steps_per_cycle):
                 phase = 2 * np.pi * j / steps_per_cycle
-                target = x + amp * np.sin(phase)
-                commands.append(f"G0 {axis}{target:.3f} F{feed}")
+                offset = amp * np.sin(phase)
+
+                if axis == "X":
+                    commands.append(f"G0 X{x + offset:.3f} Y{y:.3f} F{feed}")
+                elif axis == "Y":
+                    commands.append(f"G0 X{x:.3f} Y{y + offset:.3f} F{feed}")
 
         commands.append(f"M117 Resonance Test complete")
         commands.append("M204 P1500 R500 T1500") # restoring original accel
         commands.append("M400")  # Wait for all moves to complete
-            
+
         return commands
-    
-    
+
     def home_and_park(self, x, y, z):
         self._plugin_logger.info("Homing and parking printer...")
         start_pos = f"X{x} Y{y} Z{z}"
