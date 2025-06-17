@@ -564,49 +564,45 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
         self._plugin_manager.send_plugin_message(self._identifier, data_for_plotly)
         self.restore_shapers()
         self._plugin_logger.info("Restored shaper values to printer.")
-        
-        
+
         return    
-    
-    
-   
+
+
     def _start_adxl_capture(self, freq=3200):
         wrapper = None
-        
-        if  (self._settings.get(['sensorType']) == 'lis2dw'):
-            self._plugin_logger.info("Starting LIS2DW capture...")
+        sensor_type = self._settings.get(['sensorType'])
+        plugin_dir = os.path.dirname(os.path.abspath(__file__))
+
+        if sensor_type == "adxlusb":
+            wrapper = os.path.join(plugin_dir, "adxl345usb.py")
+            cmd = f"python3 {wrapper} -f {freq} -s {self.csv_filename}"
+        elif sensor_type == "lis2dw":
             wrapper = "lis2dwusb"
-            if freq == 5:
-                self._plugin_logger.warning("LIS2DW sensor does not support 5Hz frequency. Test will run at minimum 200Hz.")
-                freq = 200
-            else:
-                self._plugin_logger.info(f"LIS2DW sensor does not support frequency {freq}Hz. Test will run at max 1600Hz.")
-                freq = 1600    
+            cmd = f"sudo {wrapper} -f {freq} -s \"{self.csv_filename}\""
         else:
-            self._plugin_logger.info("Starting ADXL345 capture...")
             wrapper = "adxl345spi"
-        
-        
-        cmd = f"sudo {wrapper} -f {freq} -s {self.csv_filename}"
-        logfile_path = os.path.join(os.path.dirname(self.csv_filename), "adxl_output.log")
-        
+            cmd = f"sudo {wrapper} -f {freq} -s {self.csv_filename}"
+
         try:
             self._adchild = pexpect.spawn(cmd, timeout=600, encoding='utf-8')
-            self._adchild.logfile = open(logfile_path, "w")
-            
-            # Wait for the "Press Q to stop" prompt
-            self._adchild.expect("Press Q to stop", timeout=600)
-            self._plugin_logger.info("ADXL345 ready and capturing.")
-        except pexpect.TIMEOUT:
-            self._plugin_logger.error("Timed out waiting for ADXL345 to start.")
-            raise
-        except pexpect.EOF:
-            self._plugin_logger.error("ADXL345 process exited early. Check logs.")
-            raise
+
+            # Wait for ready message or error
+            i = self._adchild.expect([
+                "Press Q to stop",
+                pexpect.EOF,
+                pexpect.TIMEOUT,
+                "Traceback",
+                "Error",
+            ], timeout=30)
+            if i == 0:
+                self._plugin_logger.info(f"{sensor_type} ready and capturing.")
+            else:
+                self._plugin_logger.error(f"{sensor_type} failed to start. Output: {self._adchild.before}")
+                raise RuntimeError("Sensor process failed to start.")
         except Exception as e:
             self._plugin_logger.error(f"Unexpected error: {e}")
             raise
-   
+ 
 
     def _stop_adxl_capture(self):
         self._plugin_logger.info("Stopping ADXL345 capture...")
