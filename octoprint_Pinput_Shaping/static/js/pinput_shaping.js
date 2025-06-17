@@ -111,7 +111,7 @@ $(function () {
       self.samples([]);
       self.hasData(false);
 
-      OctoPrint.simpleApiCommand("Pinput_Shaping", "run_adxl_test", {})
+      OctoPrint.simpleApiCommand("Pinput_Shaping", "run_accelerometer_test", {})
         .done(function (response) {
           if (response.success) {
             self.summary(response.summary);
