@@ -272,7 +272,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
                 self._plugin_logger.warning("Output log not found")
 
             self._plugin_logger.info(
-                f"Detected M117: Accelerometer test completed. Summary: {summary_line}"
+                f"Accelerometer test completed. Summary: {summary_line}"
             )
             self._plugin_manager.send_plugin_message(
                 self._identifier, dict(type="close_popup")
