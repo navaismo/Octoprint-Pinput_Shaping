@@ -101,7 +101,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
             "freqStart": 5,
             "freqEnd": 132,
             "dampingRatio": "0.05",
-            "sensorType": "adxlspi"
+            "sensorType": "adxl345-spi"
         }
 
     def get_template_configs(self) -> list[dict]:
@@ -621,9 +621,9 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
         """Start the accelerometer capture process using pexpect."""
 
         wrapper = None
+        sensor_type = self._settings.get(['sensorType'])
 
-        if self._settings.get(['sensorType']) == 'lis2dw':
-            self._plugin_logger.info("Starting LIS2DW capture...")
+        if sensor_type == "lis2dw-usb":
             wrapper = "lis2dwusb"
             if freq == 5:
                 self._plugin_logger.warning(
@@ -635,10 +635,18 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
                     f"LIS2DW sensor does not support frequency {freq}Hz. Test will run at max 1600Hz."
                 )
                 freq = 1600
-        else:
-            self._plugin_logger.info("Starting ADXL345 capture...")
+
+        elif sensor_type == "adxl345-usb":
+            wrapper = "adxl345spi" # adxl345usb gets renamed adxl345spi by install script
+
+        elif sensor_type == "adxl345-spi":
             wrapper = "adxl345spi"
 
+        else:
+            self._plugin_logger.error(f"Unsupported sensor type: {sensor_type}")
+            raise ValueError(f"Unsupported sensor type: {sensor_type}")
+
+        self._plugin_logger.info(f"Starting {sensor_type} capture...")
         cmd = f"sudo {wrapper} -f {freq} -s {self.csv_filename}"
         logfile_path = os.path.join(os.path.dirname(self.csv_filename), "accelerometer_output.log")
 
