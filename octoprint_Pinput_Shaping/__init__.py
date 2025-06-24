@@ -698,7 +698,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
         }
 
 __plugin_pythoncompat__ = ">=3,<4"  # Only Python 3
-__plugin_version__ = "0.0.4.6"
+__plugin_version__ = "0.0.4.7"
 
 def __plugin_load__() -> None:
     """Load the plugin when OctoPrint starts."""
