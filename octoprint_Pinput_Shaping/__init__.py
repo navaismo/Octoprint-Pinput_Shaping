@@ -338,7 +338,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
         if printer_status == "OPERATIONAL":
             self._plugin_logger.info("Printer is idle. Proceeding with resonance test.")
             self.accelerometer_capture_active = True
-            self._plugin_logger.info("Backing up current shaper values...")
+            self._printer.commands("M117 Store shapers")
             self._printer.commands("M593")
             time.sleep(2)
             self._plugin_logger.info("Sending resonance test commands to printer...")
@@ -459,8 +459,8 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
     def gcode_received_handler(self, comm, line, *args, **kwargs) -> str:
         """Handle received G-code lines and process Input Shaping commands."""
 
-        if "Input Shaping:" in line:
-            self._plugin_logger.info("Detected: Input Shaping message")
+        if "Store shapers" in line:
+            self._plugin_logger.info("Detected M117: Store shapers message")
             self.getM593 = True
             self.shapers = {}
 
