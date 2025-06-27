@@ -338,7 +338,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
         if printer_status == "OPERATIONAL":
             self._plugin_logger.info("Printer is idle. Proceeding with resonance test.")
             self.accelerometer_capture_active = True
-            self._printer.commands("M117 Store shapers")
+            self._printer.commands("M118 Pinput_Shaping: Store shapers")
             self._printer.commands("M593")
             time.sleep(2)
             self._plugin_logger.info("Sending resonance test commands to printer...")
@@ -374,6 +374,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
             commands.append(f"G0 {axis}{pos} F{60 * self.ACCELERATION}")
 
         commands.append(f"M117 Finish Test Sweep on {axis}-Axis")
+        commands.append(f"M118 Pinput_Shaping: Finish Test Sweep on {axis}-Axis")
 
         return commands
 
@@ -399,7 +400,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
 
         commands = []
         commands.append("M117 Starting resonance test")
-        commands.append("M117 Accelerometer|ON")
+        commands.append("M118 Pinput_Shaping: Accelerometer|ON")
         commands.append("M593 F0")
         commands.append(f"M117 Resonance Test on {axis}-Axis")
 
@@ -428,7 +429,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
                 elif axis == "Y":
                     commands.append(f"G0 X{x:.3f} Y{y + offset:.3f} F{feed}")
 
-        commands.append("M117 Resonance Test complete")
+        commands.append("M118 Pinput_Shaping: Resonance Test complete")
         commands.append("M204 P1500 R500 T1500")  # restoring original accel
         commands.append("M400")  # Wait for all moves to complete
 
@@ -459,8 +460,8 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
     def gcode_received_handler(self, comm, line, *args, **kwargs) -> str:
         """Handle received G-code lines and process Input Shaping commands."""
 
-        if "Store shapers" in line:
-            self._plugin_logger.info("Detected M117: Store shapers message")
+        if "Pinput_Shaping: Store shapers" in line:
+            self._plugin_logger.info("Detected M118: Store shapers message")
             self.getM593 = True
             self.shapers = {}
 
@@ -489,8 +490,8 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
             self._plugin_logger.info(f"Shaper backup saved: {self.shapers}")
             self.getM593 = False
 
-        elif "Resonance Test complete" in line:
-            self._plugin_logger.info("Detected M117: Resonance Test complete message")
+        elif "Pinput_Shaping: Resonance Test complete" in line:
+            self._plugin_logger.info("Detected M118: Resonance Test complete message")
             self._plugin_logger.info(
                 f"Resonance Test complete for {self.currentAxis} axis"
             )
@@ -505,16 +506,16 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
             time.sleep(3)
             self.get_input_shaping_results()
 
-        elif "Finish Test Sweep" in line:
+        elif "Pinput_Shaping: Finish Test Sweep" in line:
             self._plugin_logger.info(
-                f"Detected M117: Finished Test Sweep for {self.currentAxis} axis"
+                f"Detected M118: Finished Test Sweep for {self.currentAxis} axis"
             )
             self._plugin_manager.send_plugin_message(
                 self._identifier, dict(type="close_popup")
             )
 
-        elif "Accelerometer|ON" in line:
-            self._plugin_logger.info("Detected M117: Start accelerometer capture")
+        elif "Pinput_Shaping: Accelerometer|ON" in line:
+            self._plugin_logger.info("Detected M118: Start accelerometer capture")
             self._plugin_logger.info("Accelerometer capture started...")
             self.accelerometer_capture_active = True
             threading.Thread(target=self._start_accelerometer_capture(3200)).start()
