@@ -278,7 +278,6 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
                 self._identifier, dict(type="close_popup")
             )
             self.restore_shapers()
-            self._plugin_logger.info("Restored shaper values to printer.")
             return {
                 "success": True,
                 "summary": summary_line,
@@ -543,6 +542,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
                 cmd = f"M593 {axis} F{freq:.2f} D{damp} "
                 self._printer.commands(cmd)
                 self._plugin_logger.info(f"Restored: {cmd}")
+        self._plugin_logger.info("Restored shaper values to printer.")
 
     def get_input_shaping_results(self) -> dict:
         """Get the Input Shaping results after accelerometer capture."""
@@ -615,7 +615,6 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
         # self._plugin_logger.info(f"Sending plotly data to frontend: {json.dumps(data_for_plotly)}")
         self._plugin_manager.send_plugin_message(self._identifier, data_for_plotly)
         self.restore_shapers()
-        self._plugin_logger.info("Restored shaper values to printer.")
         return {"success": True}
 
     def _start_accelerometer_capture(self, freq=3200) -> None:
