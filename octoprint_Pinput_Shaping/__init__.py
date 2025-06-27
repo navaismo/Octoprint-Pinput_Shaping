@@ -228,9 +228,6 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
         self._plugin_logger.info(f"Sensor type: {self._settings.get(['sensorType'])}")
 
         try:
-            self._plugin_logger.info("Backing up current shaper values...")
-            self._printer.commands("M593")
-            time.sleep(2)
             self.csv_filename = os.path.join(self.metadata_dir, "accelerometer_test_capture.csv")
             log_filename = os.path.join(self.metadata_dir, "accelerometer_output.log")
 
@@ -277,7 +274,6 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
             self._plugin_manager.send_plugin_message(
                 self._identifier, dict(type="close_popup")
             )
-            self.restore_shapers()
             return {
                 "success": True,
                 "summary": summary_line,
@@ -464,7 +460,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
         """Handle received G-code lines and process Input Shaping commands."""
 
         if "Input Shaping:" in line:
-            self._plugin_logger.info("Detected M117: Input Shaping message")
+            self._plugin_logger.info("Detected: Input Shaping message")
             self.getM593 = True
             self.shapers = {}
 
