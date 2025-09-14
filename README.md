@@ -32,6 +32,17 @@ It lets you run automated resonance tests, analyze acceleration data with PSD + 
 
 ---
 
+
+## Acknowledgments
+
+- Thanks to [lsellens](https://github.com/lsellens) for the contributions of general clean up, improving and testing the plugin.
+- Based on [`adxl345spi`](https://github.com/nagimov/adxl345spi) by [@nagimov](https://github.com/nagimov).
+- Thansk to [@thosoo](https://github.com/thosoo/) for ceating the Firmware for the RPI2040 and the wrapper to work with the varianst of the USB ADXL345. 
+- Inspired by Klipper's input shaping approach.
+
+---
+
+
 ## Features
 
 - 🧪 **Automated Resonance Testing**
@@ -315,13 +326,13 @@ Captured 47 samples in 0.23 s = 204.8 Hz
 
 # Marlin setup
 
-1.- Your printer must support M117 commands since it are used to control the flow of the Resonance Test.
+1.- Your printer must support M117 & M118 commands since it are used to control the flow of the Resonance Test.
 
 2.- For the Ender3 V3 SE you can use the [community firmware here](https://github.com/navaismo/Ender-3V3-SE)
 
 3.- If you are using Octoprint along my [E3v3SE Plugin](https://github.com/navaismo/OctoPrint-E3v3seprintjobdetails), please update the plugin to the version >0.2.4 so the M117 commands for the shaping plugin are allowed.
 
-4.- Your Marlin Version need to Suppor `HOST_ACTION_COMMANDS`
+
 
 <br><br>
 
@@ -410,10 +421,3 @@ Displays calculated results:
 
 GPLv3 © [@navaismo](https://github.com/navaismo)
 
----
-
-## Acknowledgments
-
-- Based on [`adxl345spi`](https://github.com/nagimov/adxl345spi) by [@nagimov](https://github.com/nagimov)
-- Thansk to [@thosoo](https://github.com/thosoo/) for ceating the Firmware for the RPI2040 and the wrapper to work with the varianst of the USB ADXL345. 
-- Inspired by Klipper's input shaping approach
