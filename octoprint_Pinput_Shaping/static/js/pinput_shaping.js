@@ -574,7 +574,7 @@ $(function () {
       }
 
       if (data.base_freq) {
-        self.baseFreq(data.base_freq);
+        self.baseFreq(data.best_shaper_freq);
       }
       if (data.axis) {
         self.bestShaperAxis(data.axis);  
