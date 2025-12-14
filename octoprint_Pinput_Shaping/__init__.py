@@ -572,6 +572,10 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
             float(self._settings.get(["dampingRatio"])),
             100,
             self.currentAxis,
+            self._settings.get(['accelMin']),
+            self._settings.get(['accelMax']),
+            self._settings.get(['freqStart']),
+            self._settings.get(['freqEnd']),
             logger=self._plugin_logger,
         )
         best_shaper = analyzer.analyze()
@@ -694,7 +698,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
         }
 
 __plugin_pythoncompat__ = ">=3,<4"  # Only Python 3
-__plugin_version__ = "0.0.4.8"
+__plugin_version__ = "0.0.4.9"
 
 def __plugin_load__() -> None:
     """Load the plugin when OctoPrint starts."""

@@ -141,17 +141,23 @@
   }
 
   #modalImage {
-    display: block;
-    margin: auto;
-    max-width: 95vw;
-    max-height: 90vh;
-    object-fit: contain;
-  }
+  display: block;
+  width: auto;
+  height: auto;
+  max-width: 100%;                    
+  max-height: 85vh;                   
+  object-fit: contain;                
+  margin: 0 auto;
+}
 
   #imageModal .modal-content {
-    background: linear-gradient(135deg, #1a1a1a, #333);
-    border: 1px solid #444;
-  }
+  width: auto !important;             
+  max-width: 95vw !important;         
+  max-height: 95vh !important;        
+  display: flex;
+  flex-direction: column;
+  pointer-events: auto;               
+}
 
   #modalImage.zoomable:hover {
     cursor: zoom-in;
@@ -164,14 +170,15 @@
   }
 
   #imageModal .modal-dialog {
-    margin: auto;
-    display: flex;
-    align-items: center;
-    justify-content: center;
-    width: auto !important;
-    max-width: 95vw;
-    max-height: 95vh;
-  }
+  display: flex !important;           
+  align-items: center !important;     
+  justify-content: center !important; 
+  margin: 0 auto !important;          
+  width: 100% !important;             
+  height: 100% !important;            
+  max-width: none !important;         
+  pointer-events: none;               
+}
 
   /* .btn-outline-primary,
   .btn-outline-info,
@@ -251,7 +258,7 @@
         <th>Z</th>
       </tr>
     </thead>
-    <tbody data-bind="foreach: samples">
+    <tbody data-bind="foreach: samples().slice(0, 5)">
       <tr>
         <td data-bind="text: time"></td>
         <td data-bind="text: x"></td>
@@ -319,28 +326,35 @@
 
     <!-- Summary Table -->
     <div class="table-responsive mt-4" data-bind="visible: showResults">
-      <table class="table table-striped table-hover table-bordered align-middle">
-        <thead class="table-dark text-center">
-          <tr>
-            <th>Shaper</th>
-            <th>Vibration (PSD Area)</th>
-            <th>Freq (Hz)</th>
-            <th>Max Acceleration (mm/s²)</th>
-            <th>Recommended</th>
-          </tr>
-        </thead>
-        <tbody data-bind="foreach: shaperResults">
-          <tr>
-            <td data-bind="attr: { title: $root.getShaperTooltip(name) }, text: name"></td>
-            <td data-bind="text: vibration"></td>
-            <td data-bind="text: base_freq"></td>
-            <td data-bind="text: acceleration"></td>
-            <td class="text-center">
-              <span data-bind="visible: isBest">✅</span>
-            </td>
-          </tr>
-        </tbody>
-      </table>
+    <table class="table table-striped table-hover table-bordered align-middle">
+      <thead class="table-dark text-center">
+        <tr>
+          <th>Shaper</th>
+          <th>Vibration (PSD Area)</th>
+          <th>Freq (Hz)</th>
+          <th title="Total duration of the shaper impulse. Shorter duration allows for higher Max Acceleration.">
+            Duration (ms)
+            <i class="fas fa-info-circle"></i>
+          </th>
+          <th title="Suggested Max Acceleration based on Shaper Duration. Use this value as a starting point.">
+            Suggested Max Accel (mm/s²)
+            <i class="fas fa-info-circle"></i>
+          </th>
+          <th>Recommended</th>
+        </tr>
+      </thead>
+      <tbody data-bind="foreach: shaperResults">
+        <tr>
+          <td data-bind="attr: { title: $root.getShaperTooltip(name) }, text: name"></td>
+          <td data-bind="text: vibr"></td>
+          <td data-bind="text: shaper_freq"></td>
+          <td data-bind="text: shaper_duration_ms"></td>
+          <td data-bind="text: '<= ' + suggested_accel"></td> <td class="text-center">
+            <span data-bind="visible: isBest">✅</span>
+          </td>
+        </tr>
+      </tbody>
+    </table>
     </div>
 
     <!-- G-code buttons -->

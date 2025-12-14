@@ -459,20 +459,53 @@ $(function () {
         ];
     
         for (const [name, shaper] of Object.entries(data.shapers)) {
+         
+          const freq = parseFloat(shaper.shaper_freq).toFixed(1);
+          const duration = parseFloat(shaper.shaper_duration_ms).toFixed(1);
+
           psdTraces.push({
             x: data.freqs,
             y: shaper.psd,
-            mode: 'lines',
-            name: `${name} (v=${shaper.vibr}, a=${shaper.accel})`,
+            // Display: ShaperName (Freq Hz / Duration ms)
+            name: `${name} (${freq} Hz / ${duration} ms) | vibr=${shaper.vibr}, accel=${shaper.suggested_accel}`,
             line: { dash: 'dash', width: 1.2 }
           });
         }
+
+        const max_x_limit = 115; // Focus on relevant frequency range
+        let max_psd_in_range = 0; // To determine dynamic y-axis limit
+        let psd_arr = data.psd_original; // Original PSD array
+        let freqs_arr = data.freqs; // Frequency array
     
+        // Find max PSD for Frequencies > 15 Hz
+        for (let i = 0; i < freqs_arr.length; i++) {
+            if (freqs_arr[i] >= 15.0 && freqs_arr[i] <= max_x_limit) {
+                if (psd_arr[i] > max_psd_in_range) {
+                    max_psd_in_range = psd_arr[i];
+                }
+            }
+        }
+
+        // Set y-axis limit with some margin based on max PSD in the relevant range
+        const y_limit = max_psd_in_range > 0 ? max_psd_in_range * 1.25 : 0.02;
+
         const layoutPSD = {
-          title: `PSD + Input Shapers (Axis ${data.axis})`,
-          xaxis: { title: 'Frequency (Hz)', range: [0, 200] },
-          yaxis: { title: 'Power Spectral Density' },
-          margin: { t: 40 }
+            title: {text: `PSD + Input Shapers <br> (Axis ${data.axis}, Resonance: ${data.base_freq} Hz)`},
+            // We apply the X limit (cut)
+            xaxis: { title: 'Frequency (Hz)', range: [0, max_x_limit] },
+            // We apply the Y limit (zoom on the resonance)
+            yaxis: { title: 'Power Spectral Density', range: [0, y_limit] },
+            margin: { t: 40, b: 150 },
+
+            legend: {
+                orientation: 'h', // Horizontal: makes the elements flow from left to right
+                x: 0,             // X position (0 = left)
+                y: -0.25,         // Y position (-0.25 = below the X axis)
+                xanchor: 'left',  // Position anchor
+                bgcolor: 'rgba(255, 255, 255, 0.5)', // Semi-transparent background (optional)
+                bordercolor: '#ccc',
+                borderwidth: 1
+            }
         };
     
         Plotly.newPlot('plot_psd', psdTraces, layoutPSD, { responsive: true });
@@ -506,14 +539,19 @@ $(function () {
       }
 
 
-      if (data.results) {
+      if (data.shapers) {
         const table = [];
-        for (let name in data.results) {
+        // data.shapers now contains the detailed, optimal results for each shaper
+        for (let name in data.shapers) {
+          const shaper_data = data.shapers[name];
           const row = {
             name: name,
-            vibration: parseFloat(data.results[name].vibr).toExponential(2),
-            base_freq: parseFloat(data.base_freq).toFixed(2), 
-            acceleration: parseFloat(data.results[name].accel).toFixed(1),
+            
+            vibr: parseFloat(shaper_data.vibr).toExponential(2),
+            shaper_freq: parseFloat(shaper_data.shaper_freq).toFixed(2), 
+            shaper_duration_ms: parseFloat(shaper_data.shaper_duration_ms).toFixed(1),
+            suggested_accel: parseInt(shaper_data.suggested_accel), // *** Suggested Max Acceleration (Heuristic from backend) ***
+            accel: parseFloat(shaper_data.accel).toFixed(1), 
             isBest: name === data.best_shaper
           };
           table.push(row);

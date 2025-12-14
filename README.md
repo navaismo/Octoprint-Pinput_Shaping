@@ -373,9 +373,8 @@ Use this to validate hardware:
 - `Test X / Y Axis` – move axes to verify motion
 - `Emergency Stop` – halt printer instantly
 
-![Hardware](https://i.imgur.com/FsXNMop.png)
 
-![SensorValues](https://i.imgur.com/P9mg3Uz.png)
+![SensorValues](./assets/sensor_values.png)
 
 An expected values when the sensor is laying normal are:
     
@@ -405,15 +404,21 @@ Select probe point from 3×3 grid and Z height slider:
 Displays calculated results:
 
 - Recommended shaper
+- Recommended Acceleration
+
+![ResultsPNG](./assets/result_table.png)
+
+
+
 - `Set Frequency` and `Set Damping` buttons
 - Signal and PSD graphs (click to view fullscreen)
 
-![ResultsPNG](https://i.imgur.com/RO1ANKL.png)
+![ResultsPNG](./assets/png_graphs.png)
 
 
 - Or explore with Plotly:
 
-![ResultsPlotly](https://i.imgur.com/IOc6M17.png)
+![ResultsPlotly](./assets/plotly_graphs.png)
 
 ---
 
