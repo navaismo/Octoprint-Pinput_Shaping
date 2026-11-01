@@ -1,12 +1,14 @@
 # OctoPrint-PInput-Shaping
 
-![Build](https://img.shields.io/badge/status-stable-brightgreen?style=flat-square)
-![Python](https://img.shields.io/badge/python-3.7+-blue?style=flat-square)
+![Build](https://img.shields.io/badge/status-under_review-orange?style=flat-square)
+![Python](https://img.shields.io/badge/python-3.9_to_3.12-blue?style=flat-square)
 ![OctoPrint](https://img.shields.io/badge/OctoPrint-Compatible-orange?style=flat-square)
 
 **Pinput Shaping** is a responsive plugin for OctoPrint that enables  **Input Shaping** workflows for Marlin firmware users.
 
-It lets you run automated resonance tests, analyze acceleration data with PSD + filtering, and generate ready-to-send `M593` commands—all within the OctoPrint interface.
+It runs resonance tests, validates acceleration captures, fits firmware-compatible shapers and verifies their application through OctoPrint.
+
+> The `plugin_optimization` branch contains reliability changes under review. Read the [firmware and installation contract](docs/firmware-contract.md) before physical testing. It targets c13 FTM v2 (`M493`) and retains legacy ZV (`M593`) support. Physical validation is still required.
 
 <br>
 <div align="center">
@@ -22,13 +24,13 @@ It lets you run automated resonance tests, analyze acceleration data with PSD + 
 - [Shaper Algorithms Supported](#shaper-algorithms-supported)
 - [Hardware Setup](#hardware-setup)
 - [Dependencies Installation](#automatic-dependencies-installation)
-- [Markin Setup](#marlin-setup)
+- [Marlin Setup](#marlin-setup)
 - [Plugin Installation](#plugin-installation)
 - [Plugin Configuration](#plugin-configuration)
 - [Plugin Usage](#plugin-usage)
-  - [Hardware Checks](#hardware-checks-section)
-  - [Running Input Shaping Tests](#run-input-shaping-test-section)
-  - [Results](#results-section)
+  - [Hardware Checks](#hardware-checks)
+  - [Running Input Shaping Tests](#running-input-shaping-tests)
+  - [Results](#results)
 
 ---
 
@@ -51,19 +53,20 @@ It lets you run automated resonance tests, analyze acceleration data with PSD + 
 
 - 📊 **Built-in Data Analysis**
   - Welch-based PSD calculation and signal filtering.
-  - Compares 5 shaper types: `ZV`, `MZV`, `EI`, `2HUMP_EI`, `3HUMP_EI`.
+  - Fits eight c13 FTM shapers, including ZV, ZVD, MZV and the EI family.
+  - Rejects invalid clocks, weak resonance measurements and distorted sweep timing.
 
 - 🎨 **Interactive Graphs**
   - Filtered Signal + PSD overlaid with shaper responses.
   - Full-screen zoom, download, and modal viewer.
 
 - 🔧 **Marlin Command Generator**
-  - Automatically suggests `M593` commands (Freq + Damping).
-  - Sends G-code directly to the printer with one click.
+  - Generates axis-specific `M493` commands for c13 FTM v2, or `M593` for legacy ZV.
+  - Applies complete results through backend validation and firmware readback.
 
 - 💻 **Modern UI**
-  - Dark mode Bootstrap layout
-  - Tooltips, hover effects, responsive layout
+  - Theme-compatible Bootstrap controls
+  - Explicit calibration stages, progress and recovery status
 
 ---
 
@@ -72,15 +75,15 @@ It lets you run automated resonance tests, analyze acceleration data with PSD + 
 | Shaper      | Description            |
 |-------------|------------------------|
 | ZV          | Zero Vibration         |
+| ZVD         | Zero Vibration and Derivative |
+| ZVDD        | Zero Vibration, Derivative and Double Derivative |
+| ZVDDD       | Zero Vibration and three derivatives |
 | MZV         | Modified ZV            |
 | EI          | Extra Insensitive      |
-| 2HUMP_EI    | 5-Impulse EI           |
-| 3HUMP_EI    | 7-Impulse EI           |
+| 2HUMP_EI    | 4-Impulse EI           |
+| 3HUMP_EI    | 5-Impulse EI           |
 
-Each is ranked based on:
-- PSD area (vibration residuals)
-- Max acceleration
-- Frequency response
+Candidates use the same raw PSD reference and are ranked by predicted residual vibration and smoothing displacement. Acceleration limits are theoretical estimates capped by the test limit, not measured mechanical capabilities.
 
 ---
 
@@ -192,7 +195,7 @@ To make work the SPI mode you need to remove the resistor.
 SSH into your Raspberry Pi save and run the script `Octo-deps-install-ADXLSPI.sh` located in the bash folder:
 
 ```bash
-sudo bash Octo-deps-install-ADXLSPI.sh
+sudo bash bash/Octo-deps-install-ADXLSPI.sh
 ```
 
 Veryfy that yo can read values from the Sensor
@@ -230,12 +233,12 @@ You can download [from his repo](https://github.com/thosoo/adxl345usb), or from 
 SSH into your Raspberry Pi save and run the script `Octo-deps-install-ADXLUSB.sh` located in the bash folder:
 
 ```bash
-sudo bash Octo-deps-install-ADXLUSB.sh
+sudo bash bash/Octo-deps-install-ADXLUSB.sh
 ```
 
 Veryfy that yo can read values from the Sensor
 ```bash
-sudo adxl345spi -f 5
+adxl345usb -f 5 -p /dev/ttyACM1
 ```
 Output:
 ```bash
@@ -299,7 +302,7 @@ You can download from my [LIS2DWUSB repo](https://github.com/navaismo/lis2dwusb)
 SSH into your Raspberry Pi save and run the script `Octo-deps-install-LIS2DW.sh` located in the bash folder:
 
 ```bash
-sudo bash Octo-deps-install-LIS2DW.sh
+sudo bash bash/Octo-deps-install-LIS2DW.sh
 ```
 
 Veryfy that yo can read values from the Sensor
@@ -324,103 +327,112 @@ Captured 47 samples in 0.23 s = 204.8 Hz
 
 
 
-# Marlin setup
+# Marlin Setup
 
-1.- Your printer must support M117 & M118 commands since it are used to control the flow of the Resonance Test.
+The reviewed c13 build uses Fixed-Time Motion v2 with static shapers and a
+trapezoidal trajectory. The plugin reads the current configuration and
+preserves it around calibration. Legacy ZV builds use a separate M593 adapter.
+Do not assume that a multi-hump recommendation can be applied with M593.
 
-2.- For the Ender3 V3 SE you can use the [community firmware here](https://github.com/navaismo/Ender-3V3-SE)
-
-3.- If you are using Octoprint along my [E3v3SE Plugin](https://github.com/navaismo/OctoPrint-E3v3seprintjobdetails), please update the plugin to the version >0.2.4 so the M117 commands for the shaping plugin are allowed.
-
-
-
-<br><br>
+See [the full firmware contract](docs/firmware-contract.md) for the reviewed
+source revision, shaper IDs, numerical validation, timing constraints and
+recovery behavior. The c13 native M495 resonance command is not enabled and
+is not used by this branch.
 
 # Plugin Installation
 
-1. Download the `.zip` from [Releases](https://github.com/navaismo/Octoprint-Pinput_Shaping/releases)
-2. Go to OctoPrint → Plugin Manager → Install from file
+Install into OctoPrint's Python environment:
 
----
+```bash
+python -m pip install -e '.[test]'
+```
+
+For a packaged installation, use OctoPrint's Plugin Manager and a source
+archive. Restart OctoPrint after backend changes. Copy the entire bash/
+directory when using a sensor installer, because the scripts share a helper.
+Choose the installer matching your hardware; inspect it before running.
+ADXL345 USB and SPI now install as separate executables.
 
 ## Plugin Configuration
 
-Open Settings → **Pinput Shaping** and configure:
+Open Settings → Pinput Shaping and configure:
 
-- Bed size (X, Y, Z)
-- Acceleration range (min/max)
-- Frequency sweep (start/end)
-- Damping ratio
+- Sensor type, USB serial device and sensor channels. Combined XYZ spectra
+  reduce sensitivity to mounting orientation.
+- Start and maximum acceleration, frequency range, frequency step and time
+  per band. Travel limits always come from the active printer profile.
+- Damping ratio. It is copied into the measurement result and does not change
+  when settings are edited later.
 
-![Config](https://i.imgur.com/OTCzcUP.png)
-
-
-<br>
-
-- Select Your Sensor Type
-
-![Stype](https://i.imgur.com/6JnIO37.png)
----
+The initial range is 20–70 Hz. Existing saved settings are retained; an old
+132 Hz end frequency can exceed the host sweep's step/acceleration limit and
+must be reviewed. The plugin rejects unreachable or unsafe requests rather
+than changing limits silently. The pinned LIS2DW wrapper still needs an
+acquisition-clock improvement before resonance calibration is supported.
 
 ## Plugin Usage
 
+### Hardware Checks
 
-### Hardware Checks Section
+1. Select the correct printer profile and sensor serial port.
+   The plugin automatically checks input-shaping support when connected and
+   idle. The tab shows **FTM v2 (M493)** or **Legacy ZV (M593)**; use
+   **Detect firmware** to retry after a failed check. Unknown or incompatible
+   firmware keeps calibration and result application disabled.
+2. Click **Prepare coordinate modes** to explicitly select millimeters,
+   absolute positioning, absolute extrusion and the preparation feed rate.
+   This action does not command axis displacement.
+3. Check **Sensor values**. USB sensor paths must differ from the printer port.
+4. Use **Test X axis** or **Test Y axis** for a bounded, low-speed motion check.
 
-Use this to validate hardware:
+**Cancel test** stops the calibration sequence and restores settings after
+queued motion drains. **Stop printer (M112)** requests shutdown without a
+confirmation dialog. It is not a substitute for a physical stop device.
 
-- `Sensor Values` – read ADXL sensor (should be X≈0, Y≈0, Z≈1)
-- `Test X / Y Axis` – move axes to verify motion
-- `Emergency Stop` – halt printer instantly
+### Running Input Shaping Tests
 
+Select a grid point and a Z height of at least 10 mm. Secure the sensor to the
+moving component for the tested axis, clear the travel area and select
+**Calibrate X** or **Calibrate Y**. The plugin checks the sensor before homing,
+disables existing shaping for measurement and records actual band timing.
+Only one calibration operation can run at a time.
 
-![SensorValues](./assets/sensor_values.png)
+### Results
 
-An expected values when the sensor is laying normal are:
-    
-    X values near 0
+A complete result contains the measured resonance, selected shaper and its
+frequency, damping, predicted spectra, quality information and raw CSV.
+PNG plots remain available offline; interactive Plotly charts are optional.
 
-    Y values near 0
-    
-    Z values near 1
+With FTM, select any fitted candidate under **Shaper to apply**. The recommendation
+is selected initially and remains marked in the comparison table; **Use
+recommendation** restores that selection. The command preview follows your
+choice. **Apply and verify selected shaper** sends its saved frequency, damping
+and applicable tolerance, then reads the setting back. Legacy firmware offers
+only **Apply and verify recommended ZV**; advanced shapers cannot be sent.
+The browser submits the session identifier and shaper name; the backend builds
+the command from saved measurement data. Results are invalidated by a new test,
+a reconnect or a change to the saved firmware configuration. EEPROM is not written. Verify
+repeatability and print quality before saving settings manually.
 
-If you tilt the sensor to the corresponding AXIS then the corresponding AXIS must show values near 1.
+If calibration is interrupted and cannot restore its settings, reset or
+reconnect the same printer and use **Restore saved settings**. Further tests
+remain blocked until recovery succeeds.
 
----
+## Development and Validation
 
-### Run Input Shaping Test Section
+```bash
+python -m pytest -q
+node tests/test_frontend.js
+PINPUT_FIRMWARE_ROOT=/path/to/Marlin_c13_octoprint python -m pytest -q tests/test_c13_contract.py
+```
 
-Select probe point from 3×3 grid and Z height slider:
-
-- Use `Resonance X` if sensor is on Head
-- Use `Resonance Y` if sensor is on Bed
-
-![Shaping](https://i.imgur.com/L0X4jNU.png)
-
----
-
-### Results Section
-
-Displays calculated results:
-
-- Recommended shaper
-- Recommended Acceleration
-
-![ResultsPNG](./assets/result_table.png)
-
-
-
-- `Set Frequency` and `Set Damping` buttons
-- Signal and PSD graphs (click to view fullscreen)
-
-![ResultsPNG](./assets/png_graphs.png)
-
-
-- Or explore with Plotly:
-
-![ResultsPlotly](./assets/plotly_graphs.png)
-
----
+Tests use synthetic captures, a simulated serial transport and stored output
+from the actual c13 C++ shaper functions. The optional live contract requires a
+C++ compiler and the firmware checkout. With OctoPrint installed, additional
+tests check real plugin registration, download routing and command tags without
+opening a device. CI includes a dedicated OctoPrint 1.11.8 integration job.
+These checks do not validate physical motion or replace a supervised hardware
+test.
 
 ## License
 

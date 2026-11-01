@@ -1,4 +1,7 @@
 *.pyc
+__pycache__/
+.pytest_cache/
+.venv/
 *.swp
 .idea
 *.iml

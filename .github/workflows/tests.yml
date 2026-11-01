@@ -1,0 +1,60 @@
+name: Offline reliability checks
+
+on: [push, pull_request]
+
+permissions:
+  contents: read
+
+jobs:
+  tests:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: ['3.9', '3.11', '3.12']
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install numerical and test dependencies
+        run: >-
+          python -m pip install numpy scipy==1.13.1 matplotlib==3.9.4
+          pandas==2.3.0 contourpy==1.2.1 pexpect flask 'pytest>=7,<9'
+      - name: Exercise analysis, transport failures and recovery
+        run: python -m pytest -q
+      - name: Check frontend state transitions
+        run: node tests/test_frontend.js
+      - name: Check installer syntax
+        run: bash -n bash/*.sh
+
+  octoprint-integration:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Install the reviewed OctoPrint runtime
+        run: >-
+          python -m pip install 'setuptools<81' OctoPrint==1.11.8 numpy
+          scipy==1.13.1 matplotlib==3.9.4 pandas==2.3.0 contourpy==1.2.1
+          pexpect 'pytest>=7,<9'
+      - name: Exercise real plugin interfaces and offline reliability checks
+        run: python -m pytest -q
+      - name: Check frontend gating with OctoPrint's Knockout library
+        run: |
+          python - <<'PY'
+          import os
+          from pathlib import Path
+          import subprocess
+          import octoprint
+          library = Path(octoprint.__file__).parent / "static/js/lib/knockout.js"
+          environment = dict(os.environ, PINPUT_KNOCKOUT_PATH=str(library))
+          subprocess.run(["node", "tests/test_frontend.js"], env=environment, check=True)
+          PY
