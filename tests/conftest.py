@@ -62,6 +62,6 @@ def profile():
 
 @pytest.fixture
 def settings():
-    return {"accelMin": 300, "accelMax": 2500, "freqStart": 20, "freqEnd": 70,
-            "freqStep": 2, "bandDuration": 0.5, "dampingRatio": "0.05",
+    return {"accelMin": 300, "accelMax": 2500, "freqStart": 5, "freqEnd": 132,
+            "sweepDuration": 20, "dampingRatio": "0.05",
             "sensorType": "adxlspi", "sensorAxis": "sum"}

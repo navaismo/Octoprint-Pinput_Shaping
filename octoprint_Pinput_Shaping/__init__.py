@@ -1,6 +1,8 @@
 """OctoPrint input-shaping calibration with exclusive, recoverable sessions."""
 
 from pathlib import Path
+import logging
+from logging.handlers import TimedRotatingFileHandler
 import re
 
 import flask
@@ -21,13 +23,32 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
                           octoprint.plugin.BlueprintPlugin):
     def __init__(self):
         self.controller = None
+        self._log_handler = None
+
+    def configure_logger(self):
+        if self._log_handler is not None:
+            self._logger.removeHandler(self._log_handler)
+            self._log_handler.close()
+            self._log_handler = None
+        try:
+            log_path = Path(self._settings.get_plugin_logfile_path()).with_name("Pinput_Shaping.log")
+            log_path.parent.mkdir(parents=True, exist_ok=True)
+            handler = TimedRotatingFileHandler(str(log_path), when="D", backupCount=3,
+                                               encoding="utf-8")
+            handler.setFormatter(logging.Formatter("%(asctime)s %(levelname)s: %(message)s"))
+            handler.setLevel(logging.INFO)
+            self._logger.addHandler(handler)
+            self._log_handler = handler
+            self._logger.info("Input-shaping diagnostics: %s", log_path)
+        except OSError:
+            self._logger.exception("Could not open Pinput_Shaping.log; using OctoPrint's main log")
 
     def get_settings_defaults(self):
         profile = self._printer_profile_manager.get_current_or_default()
         volume = profile["volume"]
         return {"sizeX": volume["width"], "sizeY": volume["depth"], "sizeZ": volume["height"],
-                "accelMin": 300, "accelMax": 2500, "freqStart": 20, "freqEnd": 70,
-                "freqStep": 2, "bandDuration": 1, "dampingRatio": "0.05",
+                "accelMin": 300, "accelMax": 2500, "freqStart": 5, "freqEnd": 132,
+                "sweepDuration": 20, "dampingRatio": "0.05",
                 "sensorType": "adxlspi", "sensorAxis": "sum", "sensorPort": ""}
 
     def get_template_configs(self):
@@ -42,8 +63,9 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
         return {"js": ["js/pinput_shaping.js"]}
 
     def on_after_startup(self):
-        keys = ("accelMin", "accelMax", "freqStart", "freqEnd", "freqStep",
-                "bandDuration", "dampingRatio", "sensorType", "sensorAxis", "sensorPort")
+        self.configure_logger()
+        keys = ("accelMin", "accelMax", "freqStart", "freqEnd", "sweepDuration",
+                "dampingRatio", "sensorType", "sensorAxis", "sensorPort")
         self.controller = CalibrationController(
             self._printer, self._printer_profile_manager.get_current_or_default,
             lambda: {key: self._settings.get([key]) for key in keys},
@@ -55,8 +77,14 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
         self._logger.info("Input shaping ready; FTM v2 and legacy ZV protocols are verified at runtime")
 
     def on_shutdown(self):
-        if self.controller:
-            self.controller.shutdown()
+        try:
+            if self.controller:
+                self.controller.shutdown()
+        finally:
+            if self._log_handler is not None:
+                self._logger.removeHandler(self._log_handler)
+                self._log_handler.close()
+                self._log_handler = None
 
     def on_event(self, event, payload):
         if self.controller:
@@ -66,6 +94,9 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
         return {"run_axis_test": ["data"], "run_accelerometer_test": [],
                 "run_resonance_test": ["data"], "prepare_modes": [],
                 "cancel": [], "apply_result": ["session_id"], "recover": [], "detect_firmware": []}
+
+    def is_api_protected(self):
+        return True
 
     def on_api_get(self, request):
         if not Permissions.STATUS.can():
@@ -136,7 +167,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
 
 
 __plugin_pythoncompat__ = ">=3.9,<3.13"
-__plugin_version__ = "0.0.4.9"
+__plugin_version__ = "0.0.5"
 
 
 def __plugin_load__():

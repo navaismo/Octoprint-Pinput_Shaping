@@ -14,12 +14,14 @@ import uuid
 
 from .capture import AccelerometerCapture
 from .firmware import FirmwareSnapshot, SHAPER_IDS, finite_number, shaping_command
-from .motion import bounds_from_profile, plan_sweep, validate_position
+from .motion import bounds_from_profile, plan_excitation, validate_position
 
 
 TAG = "plugin:Pinput_Shaping"
 RECOVERY_TAG = "pinput:recovery"
-READ_ONLY = {"M105", "M114", "M115", "M119", "M27"}
+READ_ONLY = {"M105", "M114", "M115", "M119", "M27", "M400"}
+# Automatic reports, keepalives and display updates do not change motion.
+STATUS_COMMANDS = READ_ONLY | {"M154", "M155", "M113", "M73", "M117"}
 
 
 @dataclass
@@ -203,17 +205,21 @@ class CalibrationController:
         session = self.session
         if not session or gcode == "M112":
             return None
+        if not cmd or not cmd.strip() or cmd.lstrip().startswith(";"):
+            return None
         tags = tags or set()
         if TAG in tags:
             if session.cancelled.is_set() and RECOVERY_TAG not in tags and gcode not in ("M400", "M118"):
                 return (None,)
             return None
-        if gcode in READ_ONLY:
+        if gcode in STATUS_COMMANDS:
             return None
         if session.kind == "detect":
             self.cancel("Firmware detection deferred because another command was queued")
             return None
-        self.cancel("An external command interrupted calibration; queued motion was blocked")
+        self.logger.warning("Calibration session %s (%s) blocked command %r, gcode=%r, tags=%r",
+                            session.id, session.stage, cmd[:160], gcode, sorted(map(str, tags)))
+        self.cancel(f"Command {gcode or 'unknown'} interrupted calibration; see Pinput_Shaping.log for its source")
         return (None,)
 
     def sent(self, cmd, gcode):
@@ -258,6 +264,7 @@ class CalibrationController:
 
     def _stage(self, session, stage):
         session.stage = stage
+        self.logger.info("Calibration session %s (%s): %s", session.id, session.kind, stage)
         self.publish({"type": "state", **self.status()})
 
     def _exchange(self, session, commands, timeout=15, recovery=False):
@@ -421,10 +428,12 @@ class CalibrationController:
     def _resonance(self, session, folder):
         limits = bounds_from_profile(session.profile)
         baud = self.printer.get_current_connection()[2] or 115200
-        bands = plan_sweep(session.axis, session.position[session.axis], limits[session.axis],
+        bands = plan_excitation(session.axis, session.position[session.axis], limits[session.axis],
                            session.settings, session.snapshot, baudrate=baud)
-        if sum(band.duration for band in bands) > 400:
-            raise ValueError("Sweep is too long; reduce band duration or increase frequency step")
+        self.logger.info("Calibration session %s: acceleration-sweep excitation, analysis %.3f–%.3f Hz, "
+                         "acceleration %.3f–%.3f mm/s^2, estimated motion %.3f s",
+                         session.id, float(session.settings["freqStart"]), float(session.settings["freqEnd"]),
+                         bands[0].acceleration, bands[-1].acceleration, sum(b.duration for b in bands))
         # Sensor readiness is checked before any physical motion is commanded.
         self._stage(session, "checking sensor")
         self._sensor_test(session, folder / "sensor_check.csv")
@@ -442,18 +451,30 @@ class CalibrationController:
             self._stage(session, "measuring")
             for index, band in enumerate(bands):
                 capture.ensure_alive()
-                self._exchange(session, [f"G1 {session.axis}{band.low:.5f} F600", "M400",
+                self._exchange(session, [f"G1 {session.axis}{band.center:.5f} F600", "M400",
                                          f"M204 T{band.acceleration:.6f}"])
                 _, start = self._exchange(session, [])
                 _, end = self._exchange(session, band.commands(session.axis)[1:] + ["M400"],
                                         timeout=max(15, band.duration * 3))
                 actual = end - start
                 capture.ensure_alive()
-                timing.append({**asdict(band), "actual_duration": actual})
-                if abs(actual - band.duration) > max(0.02, band.duration * 0.05):
-                    raise RuntimeError(f"Sweep timing at {band.frequency:g} Hz was distorted; no recommendation will be produced")
+                # Host/firmware timing is not a calibrated frequency source.
+                # Only reject completion faster than the programmed feed allows.
+                valid_timing = actual + 0.02 >= band.minimum_duration
+                timing.append({"kind": "acceleration_sweep", **asdict(band),
+                               "estimated_duration": band.duration,
+                               "minimum_duration": band.minimum_duration,
+                               "actual_duration": actual, "valid_timing": valid_timing})
+                self.logger.info("Excitation session %s axis %s block %d/%d: acceleration %.3f mm/s^2, "
+                                 "amplitude %.5f mm, estimated %.6f s, observed %.6f s, minimum %.6f s",
+                                 session.id, session.axis, index + 1, len(bands), band.acceleration,
+                                 band.amplitude, band.duration, actual, band.minimum_duration)
+                if not valid_timing:
+                    raise RuntimeError(f"Excitation timing is invalid: observed {actual:.6f} s, "
+                                       f"minimum at the programmed feed is {band.minimum_duration:.6f} s; "
+                                       "no recommendation will be produced")
                 self.publish({"type": "progress", "session_id": session.id,
-                              "progress": (index + 1) / len(bands), "frequency": band.frequency})
+                              "progress": (index + 1) / len(bands), "acceleration": band.acceleration})
             self._exchange(session, ["M400", "G4 P500"], timeout=15)
             capture.stop()
         finally:
@@ -583,7 +604,10 @@ class CalibrationController:
             else:
                 self.error = str(exc)
                 self.result = None
-            self.logger.exception("Calibration session %s failed", session.id)
+            if session.kind == "detect" and session.cancelled.is_set():
+                self.logger.info("Firmware detection %s deferred: %s", session.id, session.reason)
+            else:
+                self.logger.exception("Calibration session %s failed", session.id)
             if session.changed and (session.transport_fault or self.printer.get_state_id() not in ("OPERATIONAL", "OFFLINE", "CLOSED", "ERROR")):
                 self.printer.commands("M112", tags={TAG, RECOVERY_TAG})
         finally:

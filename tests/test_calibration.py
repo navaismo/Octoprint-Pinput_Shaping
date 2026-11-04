@@ -91,12 +91,27 @@ def test_disconnection_keeps_recovery_journal_and_reconnect_cannot_apply_stale_r
     assert controller.error is None
 
 
-def test_distorted_sweep_timing_prevents_analysis_and_restores_settings(controller, snapshot):
-    controller.printer.distortion = 2
-    run(controller)
+def test_impossible_motion_completion_prevents_analysis_and_restores_settings(controller, snapshot):
+    controller.printer.distortion = 0
+    identifier = run(controller)
     assert "timing" in controller.error
+    assert "minimum" in controller.error and "observed" in controller.error
     assert controller.result is None
     assert snapshot.matches(controller.printer.snapshot)
+    timing = json.loads((controller.data_folder / "runs" / identifier / "excitation.json").read_text())
+    assert timing[0]["valid_timing"] is False
+    assert timing[0]["actual_duration"] + 0.02 < timing[0]["minimum_duration"]
+
+
+@pytest.mark.parametrize("duration_factor", [0.415484746, 2])
+def test_estimated_motion_duration_does_not_claim_a_commanded_frequency(controller, duration_factor):
+    controller.printer.distortion = duration_factor
+    identifier = run(controller)
+    assert controller.error is None
+    assert controller.result is not None
+    timing = json.loads((controller.data_folder / "runs" / identifier / "excitation.json").read_text())
+    assert all(record["kind"] == "acceleration_sweep" and "frequency" not in record for record in timing)
+    assert all(record["valid_timing"] for record in timing)
 
 
 def test_plotting_failure_cannot_leave_shapers_disabled(controller, snapshot):
@@ -179,6 +194,26 @@ def test_serial_hook_only_enqueues_without_starting_capture(controller):
     controller.session = None
 
 
+def test_normal_host_monitoring_and_empty_lines_do_not_cancel_homing(controller):
+    session = types.SimpleNamespace(id="test", kind="resonance", stage="homing", cancelled=threading.Event())
+    controller.session = session
+    for cmd in ("M105", "M155 S2", "M154 S1", "M113 S2", "M73 P0", "M117 Homing", "M400", "", "; comment"):
+        gcode = cmd.split()[0] if cmd else None
+        assert controller.queuing(cmd, gcode, {"trigger:printer.commands"}) is None
+    assert not session.cancelled.is_set()
+    controller.session = None
+
+
+def test_mutating_foreign_command_is_identified_in_cancellation_and_log(controller, caplog):
+    session = types.SimpleNamespace(id="test", kind="resonance", stage="homing", cancelled=threading.Event())
+    controller.session = session
+    assert controller.queuing("G92 X0", "G92", {"plugin:other"}) == (None,)
+    assert session.cancelled.is_set()
+    assert "G92" in session.reason
+    assert "G92 X0" in caplog.text and "plugin:other" in caplog.text
+    controller.session = None
+
+
 def test_unknown_modes_and_invalid_positions_are_rejected_before_thread_start(controller):
     controller.modes["xyz"] = None
     with pytest.raises(RuntimeError, match="coordinate"):
@@ -201,6 +236,26 @@ def test_real_analyzer_and_plots_in_complete_simulated_session(controller):
     folder = controller.data_folder / "runs" / controller.result["session_id"]
     assert (folder / "psd.png").stat().st_size > 1000
     assert json.loads((folder / "result.json").read_text())["axis"] == "X"
+
+
+def test_132_hz_analysis_range_with_1500_acceleration_can_fit_a_100_hz_signal(controller, settings):
+    class HighFrequencyCapture(Capture):
+        frequency = 100
+    settings.update(freqStart=5, freqEnd=132, accelMax=1500)
+    controller.capture_factory = HighFrequencyCapture
+    controller.analyzer_factory = None
+    run(controller)
+    assert controller.error is None
+    assert abs(controller.result["base_freq"] - 100) < 1
+
+
+def test_runtime_plan_diagnostics_accept_numeric_settings_from_the_browser(controller, settings, caplog):
+    settings.update(freqStart="5", freqEnd="132", accelMax="1500")
+    with caplog.at_level("INFO"):
+        run(controller)
+    assert controller.error is None
+    assert "analysis 5.000–132.000 Hz" in caplog.text
+    assert "acceleration 300.000–1500.000 mm/s^2" in caplog.text
 
 
 def test_cancel_during_motion_finishes_with_verified_restoration(controller, snapshot):

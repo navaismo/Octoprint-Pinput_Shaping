@@ -125,6 +125,8 @@ class Printer:
 
 
 class Capture:
+    frequency = 50
+
     def __init__(self, sensor_type, path, check_cancel, port=""):
         self.path = Path(path)
         self.check_cancel = check_cancel
@@ -134,7 +136,7 @@ class Capture:
         self.check_cancel()
         t = np.arange(6400) / 800
         rng = np.random.default_rng(99)
-        data = {"time": t, "x": np.sin(2 * np.pi * 50 * t) + rng.normal(0, 0.01, len(t)),
+        data = {"time": t, "x": np.sin(2 * np.pi * self.frequency * t) + rng.normal(0, 0.01, len(t)),
                 "y": rng.normal(0, 0.01, len(t)), "z": 1 + rng.normal(0, 0.01, len(t))}
         pd.DataFrame(data).to_csv(self.path, index=False)
 

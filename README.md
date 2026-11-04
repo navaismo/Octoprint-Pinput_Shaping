@@ -394,8 +394,26 @@ confirmation dialog. It is not a substitute for a physical stop device.
 Select a grid point and a Z height of at least 10 mm. Secure the sensor to the
 moving component for the tested axis, clear the travel area and select
 **Calibrate X** or **Calibrate Y**. The plugin checks the sensor before homing,
-disables existing shaping for measurement and records actual band timing.
+disables existing shaping for measurement and records motion completion times.
 Only one calibration operation can run at a time.
+
+The test restores the original acceleration-sweep approach: center/high/center/low
+motion with 5–1 mm excursions and increasing acceleration. The analysis range
+selects vibration frequencies in the measured spectrum, independently of the
+motor reversal rate. New installations default to 5–132 Hz and a 20-second target
+excitation. Whole cycles can extend that duration. Existing saved settings are
+preserved; change the analysis end frequency if it was previously reduced.
+
+The former tiny-segment frequency sweep and its step/acceleration frequency cap
+have been removed. Completion barriers and a minimum travel-time check remain;
+the controller does not claim a precise excitation frequency from host timing.
+Signal-quality checks still reject missing samples, clipping, flat captures and
+unclear peaks. Measured frequency coverage and repeatability need hardware checks.
+
+Diagnostics are written to `Pinput_Shaping.log` in OctoPrint's configured log
+folder (normally `~/.octoprint/logs/`). Per-run timing and sensor output remain
+under the plugin data folder in `runs/<session>/excitation.json`,
+`capture.csv.log` and `sensor_check.csv.log`.
 
 ### Results
 

@@ -15,6 +15,7 @@ from octoprint_Pinput_Shaping.inputshaping_analyzer import InputShapingAnalyzer
 
 
 HEADER = r"""
+#include <algorithm>
 #include <cmath>
 #include <cstdint>
 #include <iostream>
@@ -25,6 +26,7 @@ HEADER = r"""
 #define HAS_FTM_SHAPING 1
 #define OPTARG(c,...) , __VA_ARGS__
 #define TERN_(c,...) __VA_ARGS__
+#define _MAX std::max
 #define POW std::pow
 #define SQRT std::sqrt
 #define LROUND std::lround

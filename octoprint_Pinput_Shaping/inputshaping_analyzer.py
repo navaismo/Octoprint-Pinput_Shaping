@@ -115,6 +115,7 @@ class InputShapingAnalyzer:
         freq = finite_number(freq, "shaper frequency", 1)
         df = math.sqrt(1 - self.damping ** 2)
         k = math.exp(-self.damping * math.pi / df)
+        km = k ** 0.75
         v = self.tolerance
         x = (v * v * (math.sqrt(1 - v * v) + 1)) ** (1 / 3)
         a2h = (3 * x * x + 2 * x + 3 * v * v) / (16 * x)
@@ -128,8 +129,8 @@ class InputShapingAnalyzer:
             "2HUMP_EI": [a2h, (0.5 - a2h) * k, (0.5 - a2h) * k * k, a2h * k ** 3],
             "3HUMP_EI": [a3h, (1 - v) * k / 4, ((1 + v) / 2 - 2 * a3h) * k * k,
                          (1 - v) * k ** 3 / 4, a3h * k ** 4],
-            # c13 uses K here, unlike Klipper's MZV damping coefficients.
-            "MZV": [1, math.sqrt(2) * k, k * k],
+            # Updated Marlin uses K^0.75 for impulses spaced 0.375 periods apart.
+            "MZV": [1, math.sqrt(2) * km, km * km],
         }
         result = {}
         for name, gains in coefficients.items():

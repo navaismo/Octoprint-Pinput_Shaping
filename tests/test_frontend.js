@@ -37,7 +37,7 @@ const confirmations = [];
 vm.createContext(context);
 vm.runInContext(fs.readFileSync("octoprint_Pinput_Shaping/static/js/pinput_shaping.js", "utf8"), context);
 const settings = {};
-for (const key of ["accelMin", "accelMax", "freqStart", "freqEnd", "freqStep", "bandDuration", "dampingRatio", "sensorType", "sensorAxis", "sensorPort"]) {
+for (const key of ["accelMin", "accelMax", "freqStart", "freqEnd", "sweepDuration", "dampingRatio", "sensorType", "sensorAxis", "sensorPort"]) {
     settings[key] = observable(1);
 }
 const Model = context.OCTOPRINT_VIEWMODELS[0].construct;

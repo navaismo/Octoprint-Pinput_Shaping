@@ -35,6 +35,11 @@ def test_control_permission_is_required_for_every_mutating_api_action(api, monke
             assert plugin.on_api_command(command, {}).status_code == 403
 
 
+def test_simple_api_explicitly_requires_authentication(api):
+    _, plugin = api
+    assert plugin.is_api_protected() is True
+
+
 def test_status_permission_is_required_for_results_and_downloads(api, monkeypatch):
     app, plugin = api
     monkeypatch.setattr(Permissions.STATUS, "can", lambda: False)

@@ -31,7 +31,7 @@ $(function () {
             Math.round((self.selectedCell().row + 0.5) * self.sizeY() / 3));
 
         const settingKeys = ["accelMin", "accelMax", "freqStart", "freqEnd",
-            "freqStep", "bandDuration", "dampingRatio", "sensorType", "sensorAxis", "sensorPort"];
+            "sweepDuration", "dampingRatio", "sensorType", "sensorAxis", "sensorPort"];
         settingKeys.forEach(key => { self[key] = ko.observable(); });
 
         self.available = ko.pureComputed(() =>
@@ -119,7 +119,7 @@ $(function () {
                 Plotly.react("pinput_psd", traces, {
                     title: "Measured resonance: " + result.base_freq.toFixed(1) + " Hz",
                     xaxis: {title: "Frequency (Hz)", range: [
-                        Math.max(20, Number(self.freqStart())), Number(self.freqEnd())]},
+                        Math.max(5, Number(self.freqStart())), Number(self.freqEnd())]},
                     yaxis: {title: "PSD (sensor units²/Hz)"}
                 }, {responsive: true});
             } catch (error) {

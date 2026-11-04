@@ -32,24 +32,21 @@
         <div class="control-group">
             <label class="control-label" for="pinput-accel-max">Maximum acceleration (mm/s²)</label>
             <div class="controls"><input id="pinput-accel-max" type="number" min="1" data-bind="value: accelMax, disable: busy">
-                <p class="help-block">Must fit the reported firmware limit. Step resolution can further limit reachable frequencies.</p></div>
+                <p class="help-block">Must fit the reported firmware limit. This controls the excitation strength.</p></div>
         </div>
         <div class="control-group">
-            <label class="control-label" for="pinput-freq-start">Start frequency (Hz)</label>
+            <label class="control-label" for="pinput-freq-start">Analysis start (Hz)</label>
             <div class="controls"><input id="pinput-freq-start" type="number" min="5" max="199" data-bind="value: freqStart, disable: busy">
                 <p class="help-block">Shaper fitting uses measured frequencies at or above 20 Hz.</p></div>
         </div>
         <div class="control-group">
-            <label class="control-label" for="pinput-freq-end">End frequency (Hz)</label>
+            <label class="control-label" for="pinput-freq-end">Analysis end (Hz)</label>
             <div class="controls"><input id="pinput-freq-end" type="number" min="21" max="200" data-bind="value: freqEnd, disable: busy"></div>
         </div>
         <div class="control-group">
-            <label class="control-label" for="pinput-freq-step">Frequency step (Hz)</label>
-            <div class="controls"><input id="pinput-freq-step" type="number" min="0.5" max="10" step="0.5" data-bind="value: freqStep, disable: busy"></div>
-        </div>
-        <div class="control-group">
-            <label class="control-label" for="pinput-band-duration">Time per frequency (s)</label>
-            <div class="controls"><input id="pinput-band-duration" type="number" min="0.5" max="3" step="0.5" data-bind="value: bandDuration, disable: busy"></div>
+            <label class="control-label" for="pinput-sweep-duration">Excitation duration (s)</label>
+            <div class="controls"><input id="pinput-sweep-duration" type="number" min="10" max="120" data-bind="value: sweepDuration, disable: busy">
+                <p class="help-block">Target duration; complete motion cycles may take longer.</p></div>
         </div>
         <div class="control-group">
             <label class="control-label" for="pinput-damping">Damping ratio</label>
@@ -59,6 +56,7 @@
             </select></div>
         </div>
     </form>
+    <p>The test varies acceleration over 1–5 mm strokes. The analysis range selects which measured vibration frequencies to inspect.</p>
     <p>LIS2DW calibration requires a wrapper that preserves precise, strictly increasing acquisition timestamps.
         Captures with rounded or duplicate timestamps are rejected.</p>
 </div>

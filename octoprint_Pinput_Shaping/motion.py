@@ -1,4 +1,4 @@
-"""Bounded, step-quantized host excitation for Cartesian Marlin printers."""
+"""Bounded acceleration-sweep excitation for Cartesian Marlin printers."""
 
 from dataclasses import dataclass
 import math
@@ -6,26 +6,47 @@ import math
 from .firmware import finite_number
 
 
+# Reviewed c13/c14 Configuration_adv.h and planner.cpp reject smaller segments.
+MIN_SEGMENT_STEPS = 4
+
+
 @dataclass(frozen=True)
-class SweepBand:
-    frequency: float
+class ExcitationBand:
     acceleration: float
-    low: float
-    high: float
+    center: float
+    amplitude: float
     feedrate: float
     cycles: int
 
     @property
+    def low(self):
+        return self.center - self.amplitude
+
+    @property
+    def high(self):
+        return self.center + self.amplitude
+
+    @property
+    def minimum_duration(self):
+        return 4 * self.amplitude * self.cycles / (self.feedrate / 60)
+
+    @property
     def duration(self):
-        return self.cycles / self.frequency
+        speed = self.feedrate / 60
+        if speed * speed >= self.amplitude * self.acceleration:
+            stroke_time = 2 * math.sqrt(self.amplitude / self.acceleration)
+        else:
+            stroke_time = self.amplitude / speed + speed / self.acceleration
+        return 4 * self.cycles * stroke_time
 
     def commands(self, axis):
-        # A reversal at each endpoint has zero junction velocity. For a
-        # triangular segment of length L: t=2*sqrt(L/a), hence a=16*L*f^2.
+        # Restore the original center/high/center/low acceleration sweep.
         commands = [f"M204 T{self.acceleration:.6f}"]
         for _ in range(self.cycles):
             commands.extend((f"G1 {axis}{self.high:.5f} F{self.feedrate:.3f}",
-                             f"G1 {axis}{self.low:.5f} F{self.feedrate:.3f}"))
+                             f"G1 {axis}{self.center:.5f} F{self.feedrate:.3f}",
+                             f"G1 {axis}{self.low:.5f} F{self.feedrate:.3f}",
+                             f"G1 {axis}{self.center:.5f} F{self.feedrate:.3f}"))
         return commands
 
 
@@ -61,49 +82,33 @@ def validate_position(profile, axis, position, margin=5):
     return checked
 
 
-def plan_sweep(axis, center, limits, settings, snapshot, baudrate=115200):
-    """Reject unachievable frequencies instead of silently changing the sweep.
+def plan_excitation(axis, center, limits, settings, snapshot, baudrate=115200):
+    """Plan broad excitation; analysis frequencies do not set motor reversals.
 
-    This is a model of triangular travel, not a claim of measured timing.
-    The controller checks actual band durations and rejects distorted sweeps.
+    Millimeter strokes avoid the planner's tiny-segment behavior. Estimated
+    duration sizes the capture and deadlines, not a claimed excitation clock.
     """
     start = finite_number(settings["freqStart"], "start frequency", 5, 200)
     end = finite_number(settings["freqEnd"], "end frequency", start + 1, 200)
-    step = finite_number(settings.get("freqStep", 2), "frequency step", 0.5, 10)
-    dwell = finite_number(settings.get("bandDuration", 1), "band duration", 0.5, 3)
+    duration = finite_number(settings.get("sweepDuration", 20), "excitation duration", 10, 120)
     minimum = finite_number(settings["accelMin"], "minimum acceleration", 1)
     maximum = finite_number(settings["accelMax"], "maximum acceleration", minimum,
                             snapshot.reports["M201"][axis])
     steps = snapshot.reports["M92"][axis]
     speed_limit = snapshot.reports["M203"][axis]
-    # Two microsteps per stroke keep both endpoints on the step grid.
-    max_frequency = math.sqrt(maximum * steps / 32)
-    if end > max_frequency:
-        raise ValueError(f"Requested {end:g} Hz exceeds the step/acceleration limit "
-                         f"({max_frequency:.1f} Hz). Lower the end frequency or review acceleration limits.")
     center = math.floor(center * steps + 0.5) / steps
-    frequencies = [start + i * step for i in range(int((end - start) / step) + 1)]
-    if not math.isclose(frequencies[-1], end):
-        frequencies.append(end)
     bands = []
-    for freq in frequencies:
-        requested = minimum + (maximum - minimum) * (freq - start) / (end - start)
-        stroke_steps = max(2, 2 * math.floor(requested * steps / (32 * freq * freq)))
-        length = stroke_steps / steps
-        accel = 16 * length * freq * freq
-        if accel > maximum + 1e-6:
-            raise ValueError(f"Cannot generate {freq:g} Hz within the configured acceleration")
-        low, high = center - length / 2, center + length / 2
-        if low < limits[0] + 5 or high > limits[1] - 5:
+    for index in range(16):
+        fraction = index / 15
+        accel = minimum + (maximum - minimum) * fraction
+        amplitude = max(MIN_SEGMENT_STEPS, round((5 - 4 * fraction) * steps)) / steps
+        if center - amplitude < limits[0] + 5 or center + amplitude > limits[1] - 5:
             raise ValueError("Sweep excursion exceeds printer bounds and safety margin")
-        peak_speed = math.sqrt(accel * length)
-        if peak_speed > speed_limit:
-            raise ValueError(f"Sweep would exceed the firmware's {axis} speed limit")
-        band = SweepBand(freq, accel, low, high, peak_speed * 60, max(4, math.ceil(dwell * freq)))
-        # Reserve bandwidth for line numbers, checksums, acknowledgements and
-        # temperature traffic. A successful timing check is still mandatory.
-        longest = max(map(len, band.commands(axis)[1:3])) + 14
-        if 2 * freq * longest > baudrate / 10 * 0.75:
-            raise ValueError(f"Insufficient serial bandwidth for {freq:g} Hz; lower the sweep range")
-        bands.append(band)
+        feed = min(15000, max(2000, 100 * accel), speed_limit * 60)
+        single = ExcitationBand(accel, center, amplitude, feed, 1)
+        cycles = max(1, math.ceil(duration / 16 / single.duration))
+        bands.append(ExcitationBand(accel, center, amplitude, feed, cycles))
+    wire_bytes = sum(sum(len(command) + 14 for command in band.commands(axis)) for band in bands)
+    if max(sum(band.duration for band in bands), wire_bytes / (baudrate / 10 * 0.75)) > 400:
+        raise ValueError("Excitation exceeds the time budget; review duration, speed or serial bandwidth")
     return bands
