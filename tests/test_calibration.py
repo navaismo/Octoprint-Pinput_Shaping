@@ -1,5 +1,6 @@
 from copy import deepcopy
 import json
+import logging
 import queue
 import threading
 import types
@@ -7,6 +8,7 @@ import types
 import pytest
 
 import octoprint_Pinput_Shaping.calibration as module
+from octoprint_Pinput_Shaping import PinputShapingPlugin
 from octoprint_Pinput_Shaping.calibration import CalibrationController, TAG
 from fakes import Analyzer, Capture, Clock, Printer
 
@@ -369,9 +371,40 @@ def test_usb_sensor_cannot_open_the_printer_serial_port(controller, settings):
     assert "G28" not in controller.printer.sent_commands
 
 
-def test_connection_automatically_detects_ftm_without_motion_or_setting_changes(controller, snapshot):
+def test_startup_does_not_probe_an_idle_connected_printer(controller):
+    plugin = PinputShapingPlugin()
+    plugin._logger = logging.getLogger(__name__)
+    plugin.configure_logger = lambda: None
+    plugin._printer = controller.printer
+    plugin._printer_profile_manager = types.SimpleNamespace(get_current_or_default=controller.profile)
+    plugin._settings = types.SimpleNamespace(get=lambda path: controller.settings().get(path[0]))
+    plugin._plugin_manager = types.SimpleNamespace(send_plugin_message=lambda *args: None)
+    plugin._identifier = "Pinput_Shaping"
+    plugin.get_plugin_data_folder = lambda: str(controller.data_folder)
+    try:
+        plugin.on_after_startup()
+        assert plugin.controller.thread is None
+        assert plugin.controller.status()["firmware"]["state"] == "unknown"
+        assert controller.printer.sent_commands == []
+        assert not controller.printer.hold
+    finally:
+        plugin.on_shutdown()
+
+
+@pytest.mark.parametrize("state", ["OPERATIONAL", "PRINTING"])
+def test_connection_and_idle_events_never_start_detection(controller, state):
+    controller.printer.state = state
+    for event in ("Connected", "PrinterStateChanged", "PrintDone", "PrintCancelled", "PrintFailed"):
+        controller.event(event)
+        assert controller.thread is None
+        assert controller.status()["firmware"]["state"] == "unknown"
+        assert controller.printer.sent_commands == []
+        assert not controller.printer.hold
+
+
+def test_requested_detection_reads_ftm_without_motion_or_setting_changes(controller, snapshot):
     controller.event("Connected")
-    controller.thread.join(5)
+    run(controller, "detect")
     status = controller.status()
     assert status["firmware"]["state"] == "ready"
     assert status["firmware"]["protocol"] == "ftm"
@@ -382,42 +415,49 @@ def test_connection_automatically_detects_ftm_without_motion_or_setting_changes(
     assert not controller.printer.hold
     assert all(cmd in ("M400", "M503", "M220", "M114", "M493 V", "M494") or cmd.startswith("M118 ")
                for cmd in controller.printer.sent_commands)
-    commands = list(controller.printer.sent_commands)
-    controller.detect_if_idle()
-    assert controller.printer.sent_commands == commands
 
 
-def test_automatic_legacy_detection_only_enables_zv(controller):
+def test_requested_legacy_detection_only_enables_zv(controller):
     snapshot = controller.printer.snapshot
     snapshot.ftm_global, snapshot.ftm_axes = {}, {}
     snapshot.legacy_axes = {"X": {"F": 37.0, "D": 0.1}, "Y": {"F": 42.0, "D": 0.07}}
-    controller.detect_if_idle()
-    controller.thread.join(5)
+    run(controller, "detect")
     assert controller.status()["firmware"]["protocol"] == "legacy"
     assert controller.status()["firmware"]["allowed_shapers"] == ["ZV"]
     assert not any(cmd.startswith(("M493", "M494", "M593")) for cmd in controller.printer.sent_commands)
 
 
-def test_automatic_detection_waits_for_idle_and_resets_after_disconnection(controller):
+def test_detection_requires_idle_and_a_new_request_after_reconnecting(controller):
     controller.printer.state = "PRINTING"
     controller.event("Connected")
+    with pytest.raises(RuntimeError, match="connected and idle"):
+        controller.submit("detect")
     assert controller.thread is None
     assert controller.status()["firmware"]["state"] == "unknown"
     controller.printer.state = "OPERATIONAL"
     controller.event("PrinterStateChanged")
-    controller.thread.join(5)
+    assert controller.thread is None
+    run(controller, "detect")
     assert controller.status()["firmware"]["state"] == "ready"
     controller.printer.state = "OFFLINE"
     controller.event("Disconnected")
     assert controller.status()["firmware"]["allowed_shapers"] == []
     assert controller.status()["firmware"]["state"] == "unknown"
+    commands = list(controller.printer.sent_commands)
+    thread = controller.thread
+    controller.printer.state = "OPERATIONAL"
+    controller.event("Connected")
+    assert controller.thread is thread
+    assert controller.printer.sent_commands == commands
+    assert controller.status()["firmware"]["state"] == "unknown"
+    run(controller, "detect")
+    assert controller.status()["firmware"]["state"] == "ready"
 
 
 @pytest.mark.parametrize("field,value", [("ftm_version", 1), ("trajectory", 2)])
 def test_incompatible_probe_disables_application_without_mutating_printer(controller, field, value):
     setattr(controller.printer.snapshot, field, value)
-    controller.detect_if_idle()
-    controller.thread.join(5)
+    run(controller, "detect")
     firmware = controller.status()["firmware"]
     assert firmware["state"] == "unsupported"
     assert firmware["allowed_shapers"] == []
@@ -427,17 +467,11 @@ def test_incompatible_probe_disables_application_without_mutating_printer(contro
     assert "G28" not in controller.printer.sent_commands
 
 
-def test_read_only_detection_does_not_block_external_motion_and_retries(controller, monkeypatch):
-    timers = []
-    class Timer:
-        def __init__(self, delay, callback):
-            self.callback = callback
-            timers.append(self)
-        def start(self):
-            pass
-        def cancel(self):
-            pass
-    monkeypatch.setattr(module.threading, "Timer", Timer)
+@pytest.mark.parametrize("interruption", ["external_command", "cancel", "reconnect"])
+def test_interrupted_detection_never_retries_without_another_request(controller, monkeypatch, interruption):
+    def unexpected_timer(*args, **kwargs):
+        pytest.fail("Detection must not schedule automatic retries")
+    monkeypatch.setattr(module.threading, "Timer", unexpected_timer)
     entered, release = threading.Event(), threading.Event()
     original = controller.printer.commands
     def paused(commands, **kwargs):
@@ -446,20 +480,29 @@ def test_read_only_detection_does_not_block_external_motion_and_retries(controll
             assert release.wait(5)
         return original(commands, **kwargs)
     controller.printer.commands = paused
-    controller.detect_if_idle()
-    for attempt in range(3):
-        if attempt:
-            entered.clear()
-            release.clear()
-            timers[attempt - 1].callback()
+    controller.submit("detect")
+    try:
         assert entered.wait(5)
-        assert controller.queuing("G1 X120", "G1") is None
+        if interruption == "external_command":
+            assert controller.queuing("G1 X120", "G1") is None
+            assert "G1" in controller.session.reason
+        elif interruption == "cancel":
+            controller.cancel()
+        else:
+            controller.event("Disconnected")
+            controller.event("Connected")
+    finally:
         release.set()
         controller.thread.join(5)
-        assert not controller.status()["busy"]
-        assert controller.status()["firmware"]["state"] == "unknown"
-        assert "M112" not in controller.printer.sent_commands
-        assert len(timers) == min(attempt + 1, 2)
+    assert not controller.thread.is_alive()
+    assert not controller.status()["busy"]
+    assert controller.status()["firmware"]["state"] == "unknown"
+    assert "M112" not in controller.printer.sent_commands
+    commands = list(controller.printer.sent_commands)
+    thread = controller.thread
+    controller.event("PrinterStateChanged")
+    assert controller.thread is thread
+    assert controller.printer.sent_commands == commands
     controller.printer.commands = original
     run(controller, "detect")
     assert controller.status()["firmware"]["state"] == "ready"
@@ -467,8 +510,7 @@ def test_read_only_detection_does_not_block_external_motion_and_retries(controll
 
 def test_failed_detection_reservation_does_not_leave_ui_busy(controller):
     controller.printer.set_job_on_hold = lambda *args, **kwargs: False
-    controller.detect_if_idle()
-    controller.thread.join(5)
+    run(controller, "detect")
     assert not controller.status()["busy"]
     assert controller.status()["firmware"]["state"] == "unsupported"
     assert controller.status()["firmware"]["allowed_shapers"] == []
@@ -478,8 +520,7 @@ def test_missing_shaping_reports_disable_application_without_guessing_legacy(con
     original = controller.printer.commands
     controller.printer.commands = lambda commands, **kwargs: original(
         [command for command in commands if command != "M503"], **kwargs)
-    controller.detect_if_idle()
-    controller.thread.join(5)
+    run(controller, "detect")
     firmware = controller.status()["firmware"]
     assert firmware["state"] == "unsupported"
     assert firmware["protocol"] is None
@@ -487,9 +528,12 @@ def test_missing_shaping_reports_disable_application_without_guessing_legacy(con
     assert "G28" not in controller.printer.sent_commands
 
 
-def test_shutdown_prevents_a_deferred_detection_from_starting(controller):
+def test_shutdown_rejects_detection_requests_and_events_cannot_start_a_probe(controller):
     controller.shutdown()
-    controller._retry_detection()
+    controller.event("Connected")
+    controller.event("PrinterStateChanged")
+    with pytest.raises(RuntimeError, match="shutting down"):
+        controller.submit("detect")
     assert controller.thread is None
     assert controller.printer.sent_commands == []
 

@@ -73,8 +73,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
             lambda payload: self._plugin_manager.send_plugin_message(self._identifier, payload),
             logger=self._logger,
         )
-        self.controller.detect_if_idle()
-        self._logger.info("Input shaping ready; FTM v2 and legacy ZV protocols are verified at runtime")
+        self._logger.info("Input shaping ready; firmware detection is available on demand")
 
     def on_shutdown(self):
         try:

@@ -58,13 +58,17 @@ firmware change and its own completion/abort protocol before adoption.
 
 ## Runtime protocol
 
-The plugin automatically schedules a read-only detection session at startup
-when connected and idle, on connection, or when returning to idle. Connection
-scripts and external commands take precedence over detection; interrupted
-automatic probes retry with a short delay, up to three attempts per connection.
-The tab exposes detection state, protocol and permitted shaper candidates, with
-a manual retry button. Disconnects clear the cached protocol and result.
+Firmware detection runs only when the operator requests **Detect firmware**
+with the printer connected and idle. Startup, connection and idle events never
+start probes, and failed or interrupted detection never schedules a retry.
+Connection scripts and external commands take precedence over detection;
+the operator can request another check when the printer is idle again.
+The tab exposes detection state, protocol and permitted shaper candidates.
+Disconnects clear the cached protocol and result, requiring a new request.
 No detection probe homes, moves, changes coordinate modes or writes settings.
+Explicit calibration, application and recovery operations still read fresh
+settings as part of their validation and restoration; cached detection cannot
+replace those checks.
 
 Before modifying settings, the worker reads `M503`, `M220` and `M114`, then
 checks `M493 V` and `M494` when FTM is present. Reports must contain complete

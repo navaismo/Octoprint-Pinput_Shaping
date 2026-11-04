@@ -12,7 +12,7 @@ $(function () {
         self.recoveryRequired = ko.observable(false);
         self.modesReady = ko.observable(false);
         self.firmware = ko.observable({state: "unknown", protocol: null, label: "Not detected",
-            allowed_shapers: [], message: "Waiting for an idle printer."});
+            allowed_shapers: [], message: "Click Detect firmware while the printer is connected and idle."});
         self.result = ko.observable(null);
         self.selectedShaper = ko.observable(null);
         self.samples = ko.observableArray([]);

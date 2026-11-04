@@ -375,10 +375,12 @@ acquisition-clock improvement before resonance calibration is supported.
 ### Hardware Checks
 
 1. Select the correct printer profile and sensor serial port.
-   The plugin automatically checks input-shaping support when connected and
-   idle. The tab shows **FTM v2 (M493)** or **Legacy ZV (M593)**; use
-   **Detect firmware** to retry after a failed check. Unknown or incompatible
-   firmware keeps calibration and result application disabled.
+   With the printer connected and idle, click **Detect firmware** to check
+   input-shaping support. The tab shows **FTM v2 (M493)** or **Legacy ZV (M593)**.
+   Detection runs only on request; startup, connection and returning to idle
+   do not send probes or schedule retries. Repeat detection after reconnecting
+   or an interrupted check. Unknown or incompatible firmware keeps calibration
+   and result application disabled.
 2. Click **Prepare coordinate modes** to explicitly select millimeters,
    absolute positioning, absolute extrusion and the preparation feed rate.
    This action does not command axis displacement.

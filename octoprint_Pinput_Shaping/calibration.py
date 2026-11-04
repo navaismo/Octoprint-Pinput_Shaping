@@ -64,8 +64,6 @@ class CalibrationController:
         self.result = None
         self.error = None
         self.firmware = self._unknown_firmware()
-        self._detection_attempts = 0
-        self._detection_timer = None
         self._shutting_down = False
         self.modes = dict(units=None, xyz=None, extruder=None, feed=None)
         self.journal = self.data_folder / "recovery_required.json"
@@ -73,36 +71,7 @@ class CalibrationController:
     @staticmethod
     def _unknown_firmware():
         return {"state": "unknown", "protocol": None, "label": "Not detected",
-                "allowed_shapers": [], "message": "Waiting for an idle printer."}
-
-    def detect_if_idle(self):
-        """Schedule a read-only probe once per connection without blocking events."""
-        with self.lock:
-            if (self._shutting_down or self._detection_attempts >= 3 or self.session
-                    or self.firmware["state"] != "unknown" or self.journal.exists()
-                    or self.printer.get_state_id() != "OPERATIONAL"):
-                return
-            try:
-                self._detection_attempts += 1
-                self.submit("detect")
-            except (ValueError, RuntimeError):
-                self.logger.debug("Firmware detection deferred until the printer is idle", exc_info=True)
-
-    def _retry_detection(self):
-        with self.lock:
-            self._detection_timer = None
-        self.detect_if_idle()
-
-    def _schedule_detection_retry(self):
-        with self.lock:
-            if (self._shutting_down or self._detection_timer is not None
-                    or self._detection_attempts >= 3 or self.firmware["state"] != "unknown"
-                    or self.journal.exists() or self.printer.get_state_id() != "OPERATIONAL"):
-                return
-            # Let connection scripts finish; detection must not suppress them.
-            self._detection_timer = threading.Timer(1, self._retry_detection)
-            self._detection_timer.daemon = True
-            self._detection_timer.start()
+                "allowed_shapers": [], "message": "Click Detect firmware while the printer is connected and idle."}
 
     def _set_firmware(self, session, snapshot=None, error=None):
         with self.lock:
@@ -215,7 +184,7 @@ class CalibrationController:
         if gcode in STATUS_COMMANDS:
             return None
         if session.kind == "detect":
-            self.cancel("Firmware detection deferred because another command was queued")
+            self.cancel(f"Firmware detection interrupted by command {gcode or 'unknown'}; click Detect firmware to retry")
             return None
         self.logger.warning("Calibration session %s (%s) blocked command %r, gcode=%r, tags=%r",
                             session.id, session.stage, cmd[:160], gcode, sorted(map(str, tags)))
@@ -240,17 +209,11 @@ class CalibrationController:
                 self.connection += 1
                 self.result = None
                 self.firmware = self._unknown_firmware()
-                self._detection_attempts = 0
-                if self._detection_timer:
-                    self._detection_timer.cancel()
-                    self._detection_timer = None
                 self.modes = dict(units=None, xyz=None, extruder=None, feed=None)
                 self.cancel("Printer connection was interrupted; recovery may be required")
             self.publish({"type": "state", **self.status()})
         elif event in ("PrintStarted", "PrintResumed"):
             self.cancel("A print started during calibration")
-        if event in ("Connected", "PrinterStateChanged", "PrintDone", "PrintCancelled", "PrintFailed"):
-            self.detect_if_idle()
 
     def _check(self, session):
         if session.cancelled.is_set():
@@ -605,7 +568,7 @@ class CalibrationController:
                 self.error = str(exc)
                 self.result = None
             if session.kind == "detect" and session.cancelled.is_set():
-                self.logger.info("Firmware detection %s deferred: %s", session.id, session.reason)
+                self.logger.info("Firmware detection %s interrupted: %s", session.id, session.reason)
             else:
                 self.logger.exception("Calibration session %s failed", session.id)
             if session.changed and (session.transport_fault or self.printer.get_state_id() not in ("OPERATIONAL", "OFFLINE", "CLOSED", "ERROR")):
@@ -627,16 +590,10 @@ class CalibrationController:
             with self.lock:
                 self.session = None
             self.publish({"type": "state", **self.status()})
-            if (session.connection != self.connection or
-                    (session.kind == "detect" and session.reason.startswith("Firmware detection deferred"))):
-                self._schedule_detection_retry()
 
     def shutdown(self):
         with self.lock:
             self._shutting_down = True
-            if self._detection_timer:
-                self._detection_timer.cancel()
-                self._detection_timer = None
         self.cancel("OctoPrint is shutting down")
         if self.thread:
             self.thread.join(timeout=4)

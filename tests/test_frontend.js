@@ -44,6 +44,9 @@ const Model = context.OCTOPRINT_VIEWMODELS[0].construct;
 const model = new Model([{settings: {plugins: {Pinput_Shaping: settings}}},
     {isOperational: () => true, isPrinting: () => false}]);
 model.onStartupComplete();
+model.onServerReconnect();
+model.refresh();
+assert.equal(requests.length, 0, "Startup, reconnect and status refresh must not request firmware detection");
 model.onDataUpdaterPluginMessage("Pinput_Shaping", {type: "results_ready", result: {base_freq: 50}});
 assert.equal(model.canApply(), false, "Incomplete results must not be applicable");
 const result = {session_id: "a".repeat(32), axis: "X", base_freq: 50, best_shaper: "ZV",
