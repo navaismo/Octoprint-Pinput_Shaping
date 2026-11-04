@@ -8,6 +8,8 @@ from .firmware import finite_number
 
 # Reviewed c13/c14 Configuration_adv.h and planner.cpp reject smaller segments.
 MIN_SEGMENT_STEPS = 4
+EXCITATION_BLOCKS = 8
+MIN_EXCITATION_CYCLES = 4
 
 
 @dataclass(frozen=True)
@@ -98,15 +100,15 @@ def plan_excitation(axis, center, limits, settings, snapshot, baudrate=115200):
     speed_limit = snapshot.reports["M203"][axis]
     center = math.floor(center * steps + 0.5) / steps
     bands = []
-    for index in range(16):
-        fraction = index / 15
+    for index in range(EXCITATION_BLOCKS):
+        fraction = index / (EXCITATION_BLOCKS - 1)
         accel = minimum + (maximum - minimum) * fraction
         amplitude = max(MIN_SEGMENT_STEPS, round((5 - 4 * fraction) * steps)) / steps
         if center - amplitude < limits[0] + 5 or center + amplitude > limits[1] - 5:
             raise ValueError("Sweep excursion exceeds printer bounds and safety margin")
         feed = min(15000, max(2000, 100 * accel), speed_limit * 60)
         single = ExcitationBand(accel, center, amplitude, feed, 1)
-        cycles = max(1, math.ceil(duration / 16 / single.duration))
+        cycles = max(MIN_EXCITATION_CYCLES, math.ceil(duration / EXCITATION_BLOCKS / single.duration))
         bands.append(ExcitationBand(accel, center, amplitude, feed, cycles))
     wire_bytes = sum(sum(len(command) + 14 for command in band.commands(axis)) for band in bands)
     if max(sum(band.duration for band in bands), wire_bytes / (baudrate / 10 * 0.75)) > 400:

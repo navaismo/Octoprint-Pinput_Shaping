@@ -37,13 +37,18 @@ const confirmations = [];
 vm.createContext(context);
 vm.runInContext(fs.readFileSync("octoprint_Pinput_Shaping/static/js/pinput_shaping.js", "utf8"), context);
 const settings = {};
-for (const key of ["accelMin", "accelMax", "freqStart", "freqEnd", "sweepDuration", "dampingRatio", "sensorType", "sensorAxis", "sensorPort"]) {
+for (const key of ["accelMin", "accelMax", "freqStart", "freqEnd", "sweepDuration", "dampingRatio", "sensorType", "sensorAxis", "sensorPort", "lis2dwRate"]) {
     settings[key] = observable(1);
 }
+settings.lis2dwRate(1600);
 const Model = context.OCTOPRINT_VIEWMODELS[0].construct;
 const model = new Model([{settings: {plugins: {Pinput_Shaping: settings}}},
     {isOperational: () => true, isPrinting: () => false}]);
 model.onStartupComplete();
+assert.equal(model.lis2dwRate(), 1600);
+model.lis2dwRate(800);
+model.onSettingsBeforeSave();
+assert.equal(settings.lis2dwRate(), 800, "The selected sample rate is saved for the next session");
 model.onServerReconnect();
 model.refresh();
 assert.equal(requests.length, 0, "Startup, reconnect and status refresh must not request firmware detection");

@@ -54,6 +54,90 @@ def test_complete_session_restores_before_publishing_atomic_result(controller, s
     assert controller.printer.sent_commands.index("G1 Z10.00000 F600.000") < controller.printer.sent_commands.index("G1 X110.00000 Y110.00000 F1500.000")
 
 
+def test_excitation_ramp_has_no_intermediate_stops_or_host_waits(controller):
+    batches = []
+    original = controller.printer.commands
+    def record(commands, **kwargs):
+        if controller.session.stage == "measuring":
+            batches.append(list(commands))
+        return original(commands, **kwargs)
+    controller.printer.commands = record
+    run(controller)
+    assert controller.error is None
+    blocks = [batch for batch in batches if any(":excitation:" in cmd for cmd in batch)]
+    assert len(blocks) == 1
+    assert len(batches) == 2  # Complete ramp, then settling.
+    batch = blocks[0]
+    assert batch[0].startswith("M118 ") and ":excitation:" in batch[0]
+    assert sum(cmd.startswith("M204 T") for cmd in batch) == 8
+    assert all(cmd.startswith(("G1 X", "M204 T")) for cmd in batch[1:-2])
+    assert batch[-2] == "M400" and batch.count("M400") == 1
+    assert batch[-1].startswith("M118 ")
+    assert not any(cmd == "G1 X110.00000 F600" for cmd in controller.printer.sent_commands)
+
+
+def test_cancel_discards_motion_already_queued_for_the_ramp(controller, snapshot):
+    original = controller.sent
+    sent_moves = []
+    def cancel_first_move(cmd, gcode):
+        original(cmd, gcode)
+        if controller.session.stage == "measuring" and gcode == "G1":
+            sent_moves.append(cmd)
+            controller.cancel()
+    controller.sent = cancel_first_move
+    run(controller)
+    assert len(sent_moves) == 1
+    assert "cancelled" in controller.error
+    assert snapshot.matches(controller.printer.snapshot)
+    assert not controller.journal.exists()
+    assert "M112" not in controller.printer.sent_commands
+
+
+@pytest.mark.parametrize("rate", [800, 1600])
+def test_sensor_precheck_and_capture_use_the_frozen_lis2dw_rate(controller, settings, rate):
+    settings.update(sensorType="lis2dw", lis2dwRate=rate)
+    captured_rates = []
+    class SelectedCapture(Capture):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            captured_rates.append(self.rate)
+            settings["lis2dwRate"] = 1600 if rate == 800 else 800
+    controller.capture_factory = SelectedCapture
+    identifier = run(controller)
+    assert controller.error is None
+    assert captured_rates == [rate, rate]
+    saved = json.loads((controller.data_folder / "runs" / identifier / "configuration.json").read_text())
+    assert saved["settings"]["lis2dwRate"] == rate
+
+
+def test_sensor_exit_during_excitation_restores_settings_and_never_publishes_a_result(controller, snapshot):
+    class ExitingCapture(Capture):
+        def ensure_alive(self):
+            super().ensure_alive()
+            if any(event["type"] == "progress" for event in controller.events):
+                raise RuntimeError("Accelerometer exited during measurement (exit code 4)")
+    controller.capture_factory = ExitingCapture
+    run(controller)
+    assert "exit code 4" in controller.error
+    assert controller.result is None
+    assert snapshot.matches(controller.printer.snapshot)
+    assert not controller.journal.exists()
+    assert not controller.printer.hold
+    assert "M112" not in controller.printer.sent_commands
+    assert not any(event["type"] == "results_ready" for event in controller.events)
+
+
+def test_missing_excitation_start_confirmation_invalidates_result_and_restores_settings(controller, snapshot):
+    original = controller.printer.emit
+    controller.printer.emit = lambda line: None if ":excitation:" in line else original(line)
+    run(controller)
+    assert "start confirmation was missing" in controller.error
+    assert controller.result is None
+    assert "M112" not in controller.printer.sent_commands
+    assert not controller.journal.exists()
+    assert snapshot.matches(controller.printer.snapshot)
+
+
 def test_application_uses_saved_result_and_reads_back_only_target_axis(controller, settings):
     identifier = run(controller)
     untouched = deepcopy(controller.printer.snapshot.ftm_axes["Y"])

@@ -44,6 +44,14 @@ def test_stronger_resonance_outside_40_to_70_hz_wins(tmp_path):
     assert all("accel" not in item for item in analyzer.shaper_results.values())
 
 
+@pytest.mark.parametrize("rate", [797.194228, 1594.092351])
+def test_measured_lis2dw_rates_cover_the_full_supported_analysis_range(tmp_path, rate):
+    analyzer = InputShapingAnalyzer(tmp_path, capture(tmp_path, frequencies=(100,), rate=rate), max_freq=200)
+    analyzer.analyze()
+    assert analyzer.quality["sampling_rate"] == pytest.approx(rate)
+    assert abs(analyzer.base_freq - 100) < 1
+
+
 def test_legacy_result_is_zv_and_raw_reference_is_preserved(tmp_path):
     analyzer = InputShapingAnalyzer(tmp_path, capture(tmp_path), firmware_mode="legacy")
     analyzer.analyze()

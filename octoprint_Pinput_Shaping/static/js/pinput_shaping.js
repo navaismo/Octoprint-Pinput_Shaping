@@ -31,7 +31,7 @@ $(function () {
             Math.round((self.selectedCell().row + 0.5) * self.sizeY() / 3));
 
         const settingKeys = ["accelMin", "accelMax", "freqStart", "freqEnd",
-            "sweepDuration", "dampingRatio", "sensorType", "sensorAxis", "sensorPort"];
+            "sweepDuration", "dampingRatio", "sensorType", "sensorAxis", "sensorPort", "lis2dwRate"];
         settingKeys.forEach(key => { self[key] = ko.observable(); });
 
         self.available = ko.pureComputed(() =>

@@ -11,6 +11,13 @@
                 <option value="lis2dw">LIS2DW USB</option>
             </select></div>
         </div>
+        <div class="control-group" data-bind="visible: sensorType() === 'lis2dw'">
+            <label class="control-label" for="pinput-lis2dw-rate">LIS2DW sample rate (Hz)</label>
+            <div class="controls"><select id="pinput-lis2dw-rate" data-bind="value: lis2dwRate, disable: busy">
+                <option value="800">800 Hz</option><option value="1600">1600 Hz</option>
+            </select><p class="help-block">Start at 800 Hz. Use 1600 Hz after verifying reliable acquisition.
+                This selects sensor samples per second; the analysis range is configured separately.</p></div>
+        </div>
         <div class="control-group">
             <label class="control-label" for="pinput-port">Sensor serial port</label>
             <div class="controls"><input id="pinput-port" type="text" placeholder="/dev/serial/by-id/..."

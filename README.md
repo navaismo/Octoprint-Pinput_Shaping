@@ -359,16 +359,22 @@ Open Settings → Pinput Shaping and configure:
 
 - Sensor type, USB serial device and sensor channels. Combined XYZ spectra
   reduce sensitivity to mounting orientation.
-- Start and maximum acceleration, frequency range, frequency step and time
-  per band. Travel limits always come from the active printer profile.
+- **LIS2DW sample rate (Hz)**: select **800** or **1600** in settings. The default
+  is 800 Hz; 1600 Hz remains available for a verified sensor/USB setup. The saved
+  selection applies to both the sensor precheck and calibration capture.
+- Start and maximum acceleration, analysis frequency range and excitation
+  duration. Travel limits always come from the active printer profile.
 - Damping ratio. It is copied into the measurement result and does not change
   when settings are edited later.
 
-The initial range is 20–70 Hz. Existing saved settings are retained; an old
-132 Hz end frequency can exceed the host sweep's step/acceleration limit and
-must be reviewed. The plugin rejects unreachable or unsafe requests rather
-than changing limits silently. The pinned LIS2DW wrapper still needs an
-acquisition-clock improvement before resonance calibration is supported.
+New installations use a 5–132 Hz analysis range; fitting starts at 20 Hz.
+Existing settings are retained. The analyzer checks the effective sample rate
+from captured timestamps, requiring at least 2.5 times the analysis end frequency.
+An effective rate near 797 Hz satisfies that check throughout the supported
+analysis range, up to 200 Hz. Sensor sample rate and motor reversals are separate
+settings. Failed captures are rejected without silently retrying at another rate.
+The pinned legacy LIS2DW installer still needs an acquisition-clock improvement;
+the separately installed protocol 2 wrapper provides device-side timing.
 
 ## Plugin Usage
 
@@ -388,7 +394,8 @@ acquisition-clock improvement before resonance calibration is supported.
 4. Use **Test X axis** or **Test Y axis** for a bounded, low-speed motion check.
 
 **Cancel test** stops the calibration sequence and restores settings after
-queued motion drains. **Stop printer (M112)** requests shutdown without a
+motion already accepted by the firmware drains. Commands still waiting in
+OctoPrint are discarded. **Stop printer (M112)** requests shutdown without a
 confirmation dialog. It is not a substitute for a physical stop device.
 
 ### Running Input Shaping Tests
@@ -403,11 +410,13 @@ The test restores the original acceleration-sweep approach: center/high/center/l
 motion with 5–1 mm excursions and increasing acceleration. The analysis range
 selects vibration frequencies in the measured spectrum, independently of the
 motor reversal rate. New installations default to 5–132 Hz and a 20-second target
-excitation. Whole cycles can extend that duration. Existing saved settings are
+excitation. Eight acceleration stages use at least four cycles each; the complete
+ramp is queued without intermediate `M400` barriers or host waits. Whole cycles
+can extend that duration. Existing saved settings are
 preserved; change the analysis end frequency if it was previously reduced.
 
 The former tiny-segment frequency sweep and its step/acceleration frequency cap
-have been removed. Completion barriers and a minimum travel-time check remain;
+have been removed. A final completion barrier and a minimum travel-time check remain;
 the controller does not claim a precise excitation frequency from host timing.
 Signal-quality checks still reject missing samples, clipping, flat captures and
 unclear peaks. Measured frequency coverage and repeatability need hardware checks.

@@ -11,10 +11,11 @@ from octoprint_Pinput_Shaping.motion import MIN_SEGMENT_STEPS, bounds_from_profi
 @pytest.mark.parametrize("axis", ["X", "Y"])
 def test_excitation_restores_millimeter_strokes_and_acceleration_ramp(snapshot, settings, axis):
     bands = plan_excitation(axis, 110, (0, 220), settings, snapshot)
-    assert len(bands) == 16
+    assert len(bands) == 8
     assert (bands[0].acceleration, bands[-1].acceleration) == (300, 2500)
     assert (bands[0].amplitude, bands[-1].amplitude) == (5, 1)
     for band in bands:
+        assert band.cycles >= 4
         assert 5 <= band.low < band.center < band.high <= 215
         assert band.acceleration <= settings["accelMax"]
         assert band.feedrate <= snapshot.reports["M203"][axis] * 60

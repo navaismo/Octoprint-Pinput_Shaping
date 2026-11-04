@@ -122,7 +122,8 @@ an FTM version response alone cannot establish binary equivalence.
 Excitation and the analysis frequency range are separate. The controller uses
 an acceleration sweep derived from the original plugin: center/high/center/low
 motion, excursions decreasing from 5 to 1 mm and acceleration increasing within
-the configured and reported limits. Sixteen blocks cover the ramp. Excursions
+the configured and reported limits. Eight stages cover the ramp, with at least
+four cycles per stage. Excursions
 are quantized to the step grid and remain within the selected position's travel
 margins. Speed is capped by the reported firmware limit. No machine limit is raised.
 
@@ -140,12 +141,17 @@ speed. The four-step correction did not establish a physically timed sweep;
 the resulting 43–56 Hz cap was a limit of that generator, not the accelerometer
 or the valid analysis range. That generator and its 5% timing gate are removed.
 
-Every excitation block still uses session-matched completion barriers. Estimated
-motion time sizes command deadlines; the controller rejects completion faster
+The complete bounded ramp is queued as one stream, with a session-matched start
+marker and one final `M400`/completion marker. Acceleration stages have no
+intermediate completion barriers, host waits or redundant center moves.
+The worker checks the sensor while waiting for firmware completion.
+Estimated motion time sizes command deadlines; the controller rejects completion faster
 than the programmed distance/feedrate permits, allowing a 20 ms host timing
 margin. It does not infer frequency accuracy from those completion times.
-`excitation.json` records acceleration, amplitude, feedrate, cycle count,
-estimated/minimum/observed duration and validity for each block. Transport
+`excitation.json` records the complete sweep's estimated/minimum/observed
+duration and validity, with planned acceleration, amplitude, feedrate, cycles
+and estimated/minimum duration for each stage under `blocks`. Per-stage dispatch
+times cannot establish physical completion and are not reported as such. Transport
 failures still invalidate the session and preserve recovery behavior.
 
 Millimeter-scale reversals provide broad excitation, as in the original plugin;
@@ -188,7 +194,10 @@ that rejects those parameters. Full recovery also restores the reported steps
 and motion limits. Backups are limited to Marlin's report precision; finer
 internal values cannot be recovered after a reset or a parameter overwrite.
 
-Cancellation drains the current queued band and restores settings. Lost
+The `sending` hook rejects owned motion and settings commands after cancellation
+or when their session is stale, even if OctoPrint queued them earlier. Recovery
+commands and completion barriers remain available. Cancellation drains motion
+already accepted by the firmware before restoring settings. Lost
 confirmation after mutation, an unverifiable restoration or a competing print
 can trigger `M112`; reset/reconnect and explicit recovery are then required.
 A disconnect or process termination preserves the journal. Recovery verifies
@@ -217,12 +226,24 @@ Configure a stable USB sensor device path in plugin settings, preferably
 path retains the upstream defaults: ADXL USB `/dev/ttyACM1`, LIS2DW
 `/dev/ttyACM0`.
 
-The pinned LIS2DW wrapper stamps host receipt times rounded to milliseconds.
+LIS2DW sampling is selected in plugin settings with `lis2dwRate`: 800 Hz by
+default, or 1600 Hz explicitly. Both the sensor precheck and full capture use
+the session's frozen selection. ADXL sampling remains 3200 Hz. No automatic
+rate fallback occurs after a failed capture. The analyzer uses measured sample
+times rather than the requested rate and retains its 2.5-times-end-frequency
+gate; the reported effective rate near 797 Hz covers analysis up to 200 Hz.
+
+The legacy LIS2DW wrapper pinned by the installer stamps host receipt times rounded to milliseconds.
 Its sensor-value check remains usable, but high-rate resonance captures fail
 timestamp validation before homing. A precise acquisition-clock protocol is
 needed in the external sensor firmware/wrapper; fabricated uniform timestamps
 would conceal dropped samples and are not a substitute. The plugin cannot
 repair that external timing contract by itself.
+The separately installed protocol 2 wrapper announces device FIFO-edge timing
+and preserves the same CSV and Q/EOF interface. It remains subject to the
+plugin's timestamp validation and must stay alive until the requested stop;
+the readiness banner alone does not establish capture validity. This change
+does not update the installer's pinned revision or flash the sensor firmware.
 
 Run artifacts live in OctoPrint's plugin data folder under `runs/<session>/`.
 Authenticated downloads require status permission. Runtime artifacts are not
@@ -236,3 +257,8 @@ The plugin writes `Pinput_Shaping.log` in OctoPrint's configured log directory
 keeps OctoPrint's normal logger propagation. This restores the dedicated file
 that the earlier optimization refactor stopped configuring. Sensor subprocess
 output remains in each run's `capture.csv.log` or `sensor_check.csv.log`.
+The sensor PTY is drained in a background reader throughout capture, including
+while the calibration worker waits for printer motion. Driver errors are kept
+in that log; unexpected exits report the driver, exit code or signal and the
+log path. A passed sensor precheck does not guarantee that the later capture
+will survive motion or a connection failure.

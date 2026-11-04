@@ -203,6 +203,18 @@ class CalibrationController:
             if match:
                 self.modes["feed"] = float(match[1]) * (25.4 if self.modes["units"] == "G20" else 1)
 
+    def sending(self, cmd, gcode, tags=None):
+        """Discard owned commands still in OctoPrint's queue after cancellation."""
+        tags = tags or set()
+        if TAG not in tags or gcode in ("M112", "M400", "M118"):
+            return None
+        session = self.session
+        if (session is None or session.connection != self.connection
+                or f"pinput:session:{session.id}" not in tags
+                or (session.cancelled.is_set() and RECOVERY_TAG not in tags)):
+            return (None,)
+        return None
+
     def event(self, event):
         if event in ("Connected", "Disconnected", "Error"):
             with self.lock:
@@ -230,7 +242,7 @@ class CalibrationController:
         self.logger.info("Calibration session %s (%s): %s", session.id, session.kind, stage)
         self.publish({"type": "state", **self.status()})
 
-    def _exchange(self, session, commands, timeout=15, recovery=False):
+    def _exchange(self, session, commands, timeout=15, recovery=False, timestamps=None, monitor=None):
         if not recovery:
             self._check(session)
         session.counter += 1
@@ -243,6 +255,8 @@ class CalibrationController:
         while time.monotonic() < deadline:
             if not recovery:
                 self._check(session)
+                if monitor is not None:
+                    monitor()
             elif self.printer.get_state_id() != "OPERATIONAL" or session.connection != self.connection:
                 raise RuntimeError("Cannot restore settings on a changed or unavailable connection")
             try:
@@ -250,7 +264,11 @@ class CalibrationController:
             except queue.Empty:
                 continue
             cleaned = re.sub(r"^(?:echo:)?\s*", "", line.strip())
+            if timestamps is not None and cleaned in timestamps:
+                timestamps[cleaned] = stamp
             if cleaned == marker:
+                if timestamps is not None and any(value is None for value in timestamps.values()):
+                    raise RuntimeError("Firmware start confirmation was missing; results are invalid")
                 errors = [x for x in lines if re.search(r"(?:Error:|\?Invalid|\?Wrong|Unknown command:)", x)]
                 if errors:
                     raise RuntimeError("Firmware rejected a command: " + errors[-1][:200])
@@ -331,7 +349,8 @@ class CalibrationController:
             printer_port = self.printer.get_current_connection()[1]
             if printer_port and os.path.realpath(port) == os.path.realpath(printer_port):
                 raise ValueError("The accelerometer port must differ from the printer connection")
-        return self.capture_factory(sensor, path, check_cancel=lambda: self._check(session), port=port)
+        options = {"lis2dw_rate": session.settings.get("lis2dwRate", 800)} if sensor == "lis2dw" else {}
+        return self.capture_factory(sensor, path, check_cancel=lambda: self._check(session), port=port, **options)
 
     def _analyzer(self, session, path):
         if self.analyzer_factory is None:
@@ -407,39 +426,45 @@ class CalibrationController:
             (["M205 X0 Y0"] if "X" in session.snapshot.reports["M205"] else []))
         self._home(session)
         capture = self._capture(session, folder / "capture.csv")
-        timing = []
+        measurement = {"kind": "acceleration_sweep", "continuous": True,
+                       "estimated_duration": sum(b.duration for b in bands),
+                       "minimum_duration": sum(b.minimum_duration for b in bands),
+                       "actual_duration": None, "valid_timing": False,
+                       "blocks": [{**asdict(b), "estimated_duration": b.duration,
+                                   "minimum_duration": b.minimum_duration} for b in bands]}
+        timing = [measurement]
         try:
             capture.start()
             self._wait(session, 0.3)
             self._stage(session, "measuring")
-            for index, band in enumerate(bands):
-                capture.ensure_alive()
-                self._exchange(session, [f"G1 {session.axis}{band.center:.5f} F600", "M400",
-                                         f"M204 T{band.acceleration:.6f}"])
-                _, start = self._exchange(session, [])
-                _, end = self._exchange(session, band.commands(session.axis)[1:] + ["M400"],
-                                        timeout=max(15, band.duration * 3))
-                actual = end - start
-                capture.ensure_alive()
-                # Host/firmware timing is not a calibrated frequency source.
-                # Only reject completion faster than the programmed feed allows.
-                valid_timing = actual + 0.02 >= band.minimum_duration
-                timing.append({"kind": "acceleration_sweep", **asdict(band),
-                               "estimated_duration": band.duration,
-                               "minimum_duration": band.minimum_duration,
-                               "actual_duration": actual, "valid_timing": valid_timing})
-                self.logger.info("Excitation session %s axis %s block %d/%d: acceleration %.3f mm/s^2, "
-                                 "amplitude %.5f mm, estimated %.6f s, observed %.6f s, minimum %.6f s",
-                                 session.id, session.axis, index + 1, len(bands), band.acceleration,
-                                 band.amplitude, band.duration, actual, band.minimum_duration)
-                if not valid_timing:
-                    raise RuntimeError(f"Excitation timing is invalid: observed {actual:.6f} s, "
-                                       f"minimum at the programmed feed is {band.minimum_duration:.6f} s; "
-                                       "no recommendation will be produced")
-                self.publish({"type": "progress", "session_id": session.id,
-                              "progress": (index + 1) / len(bands), "acceleration": band.acceleration})
-            self._exchange(session, ["M400", "G4 P500"], timeout=15)
+            start_marker = f"Pinput_Shaping:{session.id}:excitation:start"
+            timestamps = {start_marker: None}
+            commands = [f"M118 {start_marker}"]
+            for band in bands:
+                commands.extend(band.commands(session.axis))
+            commands.append("M400")
+            # Stream the complete bounded ramp. The sending hook suppresses
+            # unsent motion if cancellation, sensor failure or disconnect occurs.
+            _, end = self._exchange(session, commands,
+                                    timeout=max(30, measurement["estimated_duration"] * 3),
+                                    timestamps=timestamps, monitor=capture.ensure_alive)
+            actual = end - timestamps[start_marker]
+            valid_timing = actual + 0.02 >= measurement["minimum_duration"]
+            measurement.update(actual_duration=actual, valid_timing=valid_timing)
+            self.logger.info("Excitation session %s axis %s: %d continuous blocks, "
+                             "estimated %.6f s, observed %.6f s, minimum %.6f s",
+                             session.id, session.axis, len(bands), measurement["estimated_duration"],
+                             actual, measurement["minimum_duration"])
+            if not valid_timing:
+                raise RuntimeError(f"Excitation timing is invalid: observed {actual:.6f} s, "
+                                   f"minimum at the programmed feed is {measurement['minimum_duration']:.6f} s; "
+                                   "no recommendation will be produced")
+            self.publish({"type": "progress", "session_id": session.id, "progress": 1})
+            self._exchange(session, ["G4 P500"], timeout=15, monitor=capture.ensure_alive)
             capture.stop()
+        except Exception:
+            session.cancelled.set()
+            raise
         finally:
             capture.abort()
             self._write_json(folder / "excitation.json", timing)
@@ -567,6 +592,7 @@ class CalibrationController:
             else:
                 self.error = str(exc)
                 self.result = None
+                session.cancelled.set()
             if session.kind == "detect" and session.cancelled.is_set():
                 self.logger.info("Firmware detection %s interrupted: %s", session.id, session.reason)
             else:

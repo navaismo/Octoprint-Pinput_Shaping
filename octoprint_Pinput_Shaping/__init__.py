@@ -49,7 +49,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
         return {"sizeX": volume["width"], "sizeY": volume["depth"], "sizeZ": volume["height"],
                 "accelMin": 300, "accelMax": 2500, "freqStart": 5, "freqEnd": 132,
                 "sweepDuration": 20, "dampingRatio": "0.05",
-                "sensorType": "adxlspi", "sensorAxis": "sum", "sensorPort": ""}
+                "sensorType": "adxlspi", "sensorAxis": "sum", "sensorPort": "", "lis2dwRate": 800}
 
     def get_template_configs(self):
         return [
@@ -65,7 +65,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
     def on_after_startup(self):
         self.configure_logger()
         keys = ("accelMin", "accelMax", "freqStart", "freqEnd", "sweepDuration",
-                "dampingRatio", "sensorType", "sensorAxis", "sensorPort")
+                "dampingRatio", "sensorType", "sensorAxis", "sensorPort", "lis2dwRate")
         self.controller = CalibrationController(
             self._printer, self._printer_profile_manager.get_current_or_default,
             lambda: {key: self._settings.get([key]) for key in keys},
@@ -156,6 +156,11 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
         if self.controller:
             self.controller.sent(cmd, gcode)
 
+    def gcode_sending_handler(self, comm, phase, cmd, cmd_type, gcode, *args, **kwargs):
+        if self.controller:
+            return self.controller.sending(cmd, gcode, kwargs.get("tags"))
+        return None
+
     def get_update_information(self):
         return {"Pinput_Shaping": {
             "displayName": "Pinput Shaping", "displayVersion": self._plugin_version,
@@ -176,5 +181,6 @@ def __plugin_load__():
         "octoprint.comm.protocol.gcode.received": __plugin_implementation__.gcode_received_handler,
         "octoprint.comm.protocol.gcode.queuing": __plugin_implementation__.gcode_queuing_handler,
         "octoprint.comm.protocol.gcode.sent": __plugin_implementation__.gcode_sent_handler,
+        "octoprint.comm.protocol.gcode.sending": __plugin_implementation__.gcode_sending_handler,
         "octoprint.plugin.softwareupdate.check_config": __plugin_implementation__.get_update_information,
     }

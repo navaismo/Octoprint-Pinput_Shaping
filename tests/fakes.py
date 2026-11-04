@@ -52,11 +52,14 @@ class Printer:
     def commands(self, commands, tags=None):
         if isinstance(commands, str):
             commands = [commands]
+        # OctoPrint queues commands before the serial sender processes them.
+        commands = [cmd for cmd in commands
+                    if self.controller.queuing(cmd, cmd.split()[0], tags) != (None,)]
         for cmd in commands:
             gcode = cmd.split()[0]
             if self.state != "OPERATIONAL" and gcode != "M112":
                 continue
-            if self.controller.queuing(cmd, gcode, tags) == (None,):
+            if self.controller.sending(cmd, gcode, tags) == (None,):
                 continue
             self.sent_commands.append(cmd)
             self.controller.sent(cmd, gcode)
@@ -127,10 +130,11 @@ class Printer:
 class Capture:
     frequency = 50
 
-    def __init__(self, sensor_type, path, check_cancel, port=""):
+    def __init__(self, sensor_type, path, check_cancel, port="", lis2dw_rate=800):
         self.path = Path(path)
         self.check_cancel = check_cancel
         self.stopped = False
+        self.rate = lis2dw_rate if sensor_type == "lis2dw" else 3200
 
     def start(self):
         self.check_cancel()
