@@ -183,13 +183,19 @@ class InputShapingAnalyzer:
                             resonances=[float(f[i]) for i in peaks])
         if dominant < 2 or dominant >= len(f) - 2:
             raise MeasurementError("Dominant resonance lies at the sweep boundary; widen the measured range")
+        return self.fit_spectrum(f, p)
+
+    def fit_spectrum(self, f, p, search_min=20, search_max=200):
+        """Fit a validated nonnegative vibration-sensitivity power spectrum."""
         integrate = getattr(np, "trapezoid", None) or np.trapz
         reference = float(integrate(p, f))
         if reference <= 0 or not math.isfinite(reference):
             raise MeasurementError("Invalid reference vibration energy")
         names = SHAPER_IDS if self.firmware_mode == "ftm" else {"ZV": 1}
         tested_damping = (max(0.01, self.damping * 0.75), self.damping, min(0.25, self.damping * 1.5))
-        search = np.arange(20, min(200, self.sampling_rate * 0.4) + 0.001, 0.5)
+        search = np.arange(search_min, min(search_max, self.sampling_rate * 0.4) + 0.001, 0.5)
+        if not len(search):
+            raise MeasurementError("No supported shaper frequency inside the measured band")
         for name in names:
             best = None
             for frequency in search:
@@ -241,11 +247,12 @@ class InputShapingAnalyzer:
         figure = Figure(figsize=(12, 6), constrained_layout=True)
         FigureCanvasAgg(figure)
         ax = figure.subplots()
-        ax.plot(self.freqs, self.psd, color="black", label="Unshaped reference")
+        ax.plot(self.freqs, self.psd, color="black", label=getattr(self, "reference_label", "Unshaped reference"))
         for name, item in self.shaper_results.items():
             ax.plot(self.freqs, item["psd"], label=f"{name} @ {item['shaper_freq']:.1f} Hz (predicted)")
-        ax.set(xlabel="Frequency (Hz)", ylabel="PSD (sensor units²/Hz)", xlim=(self.min_freq, self.max_freq),
-               title=f"{self.axis}: measured resonance {self.base_freq:.1f} Hz")
+        title = f"{self.axis}: measured resonance {self.base_freq:.1f} Hz" if self.base_freq is not None else f"{self.axis}: native sweep diagnostics"
+        ax.set(xlabel="Frequency (Hz)", ylabel=getattr(self, "spectrum_label", "PSD (sensor units²/Hz)"),
+               xlim=(self.min_freq, self.max_freq), title=title)
         ax.legend(fontsize=8)
         figure.savefig(psd_path, dpi=120)
         return str(signal_path), str(psd_path), self.shaper_results, self.best_shaper, self.base_freq
@@ -258,4 +265,5 @@ class InputShapingAnalyzer:
                 "shapers": {name: {**{k: v for k, v in item.items() if k != "psd"},
                                    "psd": item["psd"].tolist()} for name, item in self.shaper_results.items()},
                 "base_freq": self.base_freq, "best_shaper": self.best_shaper,
-                "best_shaper_freq": self.shaper_results[self.best_shaper]["shaper_freq"]}
+                "best_shaper_freq": self.shaper_results[self.best_shaper]["shaper_freq"] if self.best_shaper else None,
+                "spectrum_label": getattr(self, "spectrum_label", "PSD (sensor units²/Hz)")}

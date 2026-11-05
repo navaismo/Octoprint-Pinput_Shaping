@@ -122,7 +122,8 @@ def test_live_c13_configuration_and_protocol():
         assert re.search(r"^\s*#define\s+" + name + r"\b", advanced, re.M), name
     assert re.search(r"^\s*#define\s+FTM_FS\s+1000\b", advanced, re.M)
     assert re.search(r"^\s*#define\s+FTM_MIN_SHAPE_FREQ\s+20\b", advanced, re.M)
-    assert not re.search(r"^\s*#define\s+RESONANCE_TEST\b", advanced, re.M)
+    # Native resonance is optional and independent of the shaping contract.
+    # Updated c13 builds may enable it without changing shaper coefficients.
     assert re.search(r"^#define\s+BAUDRATE\s+115200\b", configuration, re.M)
     header = (root / "Marlin/src/module/ft_motion/shaping.h").read_text()
     aliases = {"2HUMP_EI": "2HEI", "3HUMP_EI": "3HEI"}

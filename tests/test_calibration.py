@@ -79,8 +79,8 @@ def test_excitation_ramp_has_no_intermediate_stops_or_host_waits(controller):
 def test_cancel_discards_motion_already_queued_for_the_ramp(controller, snapshot):
     original = controller.sent
     sent_moves = []
-    def cancel_first_move(cmd, gcode):
-        original(cmd, gcode)
+    def cancel_first_move(cmd, gcode, tags=None):
+        original(cmd, gcode, tags)
         if controller.session.stage == "measuring" and gcode == "G1":
             sent_moves.append(cmd)
             controller.cancel()

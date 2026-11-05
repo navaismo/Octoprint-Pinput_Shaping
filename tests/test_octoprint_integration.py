@@ -10,7 +10,7 @@ import octoprint.plugin
 import pytest
 
 import octoprint_Pinput_Shaping as plugin_module
-from octoprint_Pinput_Shaping.calibration import CalibrationController, TAG, RECOVERY_TAG
+from octoprint_Pinput_Shaping.calibration import CalibrationController, Session, TAG, RECOVERY_TAG
 
 
 pytestmark = pytest.mark.skipif(
@@ -45,6 +45,35 @@ def test_real_printer_commands_preserve_session_tags():
     assert [command for command, _ in sent] == ["M400", "M118 session-marker"]
     assert all({TAG, "pinput:session:test", "trigger:printer.commands"} <= options["tags"]
                for _, options in sent)
+
+
+def test_real_sent_hook_defers_native_logging_to_the_worker(tmp_path):
+    from octoprint.util.comm import MachineCom
+
+    writing_from_hook = True
+    records = []
+    def info(message, *args):
+        assert not writing_from_hook, "Serial hooks must not write plugin diagnostics"
+        records.append(message % args)
+    controller = CalibrationController(None, lambda: {}, lambda: {}, tmp_path, lambda payload: None,
+                                       logger=SimpleNamespace(info=info))
+    session = Session("resonance", "X", {}, {}, {}, controller.connection,
+                      native_mode=True, firmware_id=123)
+    controller.session = session
+    plugin = plugin_module.PinputShapingPlugin()
+    plugin.controller = controller
+    comm = SimpleNamespace(isStreaming=lambda: False, isPrinting=lambda: False,
+        _log_command_phase=lambda *args, **kwargs: None, _logger=logging.getLogger(__name__),
+        _gcode_hooks={"sent": {"Pinput_Shaping": plugin.gcode_sent_handler}})
+    MachineCom._process_command_phase(comm, "sent", "M495 X F20 T60 O20 A40 I123 S", gcode="M495",
+                                      tags={TAG, f"pinput:session:{session.id}"})
+    assert session.native_sent
+    assert not records
+    writing_from_hook = False
+    controller._native_log_transmissions(session)
+    assert len(records) == 1
+    assert "native TX" in records[0]
+    assert "I123 S" in records[0]
 
 
 def test_real_sending_phase_drops_cancelled_or_stale_motion_and_allows_restoration(tmp_path):

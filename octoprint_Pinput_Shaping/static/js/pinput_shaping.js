@@ -17,6 +17,11 @@ $(function () {
         self.selectedShaper = ko.observable(null);
         self.samples = ko.observableArray([]);
         self.progress = ko.observable(0);
+        self.progressSource = ko.observable("");
+        self.sensorState = ko.observable("");
+        self.nativeCapability = ko.observable({state: "unknown", protocol: null,
+            message: "Click Detect M495 Support for this printer connection."});
+        self.diagnostics = ko.observable(null);
         self.interactiveAvailable = ko.observable(typeof Plotly !== "undefined");
         self.sizeX = ko.observable(220);
         self.sizeY = ko.observable(220);
@@ -31,7 +36,9 @@ $(function () {
             Math.round((self.selectedCell().row + 0.5) * self.sizeY() / 3));
 
         const settingKeys = ["accelMin", "accelMax", "freqStart", "freqEnd",
-            "sweepDuration", "dampingRatio", "sensorType", "sensorAxis", "sensorPort", "lis2dwRate"];
+            "sweepDuration", "dampingRatio", "sensorType", "sensorAxis", "sensorPort", "lis2dwRate",
+            "excitationBackend", "nativeStart", "nativeEnd", "nativeOctave", "nativeAccel",
+            "nativePrepareTimeout", "nativeMaxCapture", "nativeCancelTimeout"];
         settingKeys.forEach(key => { self[key] = ko.observable(); });
 
         self.available = ko.pureComputed(() =>
@@ -39,6 +46,28 @@ $(function () {
             !self.busy() && !self.recoveryRequired());
         self.firmwareReady = ko.pureComputed(() => self.firmware().state === "ready");
         self.canMove = ko.pureComputed(() => self.available() && self.modesReady() && self.firmwareReady());
+        self.nativeSelected = ko.pureComputed(() => self.excitationBackend() === "marlin_m495");
+        self.nativeValidation = ko.pureComputed(() => {
+            if (!self.nativeSelected()) return "";
+            const start = Number(self.nativeStart()), end = Number(self.nativeEnd());
+            const octave = Number(self.nativeOctave()), accel = Number(self.nativeAccel());
+            const prep = Number(self.nativePrepareTimeout()), cap = Number(self.nativeMaxCapture());
+            const cancel = Number(self.nativeCancelTimeout());
+            if (![start, end, octave, accel, prep, cap, cancel].every(Number.isFinite) || start < 5 ||
+                end <= start || end > 200 || octave < 20 || octave > 60 || accel < 0.0001 ||
+                accel > 32767 * 4 * Math.PI * Math.PI / 8 - 1 || prep < 30 || prep > 240 ||
+                cap < 30 || cap > 480 || cancel < 10 || cancel > 300 ||
+                [start, end, octave].some(value => Math.abs(value * 100 - Math.round(value * 100)) > 1e-6)) {
+                return "Native parameters are invalid. F: 5–199.99 Hz; T: greater than F, up to 200 Hz; O: 20–60 seconds.";
+            }
+            if (25 + octave * Math.log2(end / start) * 1.15 + 5 > cap) {
+                return "Maximum capture must cover sensor startup, sweep and tail.";
+            }
+            return "";
+        });
+        self.canCalibrate = ko.pureComputed(() => self.canMove() &&
+            (!self.nativeSelected() || (self.nativeCapability().state === "supported" &&
+                self.nativeCapability().protocol === 2 && !self.nativeValidation())));
         self.applyLabel = ko.pureComputed(() => self.firmware().protocol === "legacy" ?
             "Apply and verify recommended ZV" : "Apply and verify selected shaper");
         self.shaperChoices = ko.pureComputed(() => {
@@ -63,6 +92,7 @@ $(function () {
             const firmware = self.firmware();
             const candidate = self.selectedCandidate();
             return self.available() && self.firmwareReady() && !!result &&
+                result.recommendation_valid !== false &&
                 result.firmware_mode === firmware.protocol &&
                 firmware.allowed_shapers.includes(self.selectedShaper()) &&
                 !!candidate && !!self.selectedCommand() &&
@@ -85,7 +115,7 @@ $(function () {
         });
 
         self.fileURL = function (kind) {
-            const result = self.result();
+            const result = self.result() && self.result().files[kind] ? self.result() : self.diagnostics();
             if (!result || !result.files[kind]) return "";
             const root = typeof BASEURL === "string" ? BASEURL : "/";
             return root + "plugin/Pinput_Shaping/files/" +
@@ -94,7 +124,8 @@ $(function () {
         };
 
         function showResult(result) {
-            if (!result || !result.shapers || !Number.isFinite(result.best_shaper_freq)) {
+            if (!result || !result.shapers || (!Number.isFinite(result.best_shaper_freq) &&
+                    !(result.backend === "marlin_m495" && result.recommendation_valid === false))) {
                 self.result(null);
                 return;
             }
@@ -111,16 +142,17 @@ $(function () {
                 ], {title: "Axis " + result.axis, xaxis: {title: "Time (s)"},
                     yaxis: {title: "Acceleration (sensor units)"}}, {responsive: true});
                 const traces = [{x: result.freqs, y: result.psd_original,
-                    name: "Unshaped reference", mode: "lines"}];
+                    name: result.backend === "marlin_m495" ? "Relative fundamental response" : "Unshaped reference", mode: "lines"}];
                 Object.entries(result.shapers).forEach(([name, shaper]) => {
                     traces.push({x: result.freqs, y: shaper.psd, mode: "lines",
                         name: name + " @ " + shaper.shaper_freq.toFixed(1) + " Hz (predicted)"});
                 });
                 Plotly.react("pinput_psd", traces, {
-                    title: "Measured resonance: " + result.base_freq.toFixed(1) + " Hz",
+                    title: Number.isFinite(result.base_freq) ? "Measured resonance: " + result.base_freq.toFixed(1) + " Hz" : "Native sweep response",
                     xaxis: {title: "Frequency (Hz)", range: [
-                        Math.max(5, Number(self.freqStart())), Number(self.freqEnd())]},
-                    yaxis: {title: "PSD (sensor units²/Hz)"}
+                        result.native_parameters ? result.native_parameters.start : Math.max(5, Number(self.freqStart())),
+                        result.native_parameters ? result.native_parameters.end : Number(self.freqEnd())]},
+                    yaxis: {title: result.spectrum_label || "PSD (sensor units²/Hz)"}
                 }, {responsive: true});
             } catch (error) {
                 console.warn("Interactive charts unavailable; PNG plots remain available.", error);
@@ -140,6 +172,9 @@ $(function () {
             self.error(data.error || "");
             self.recoveryRequired(!!data.recovery_required);
             self.modesReady(!!data.modes_ready);
+            self.diagnostics(data.diagnostics || null);
+            self.nativeCapability(data.native_capability || {state: "unknown", protocol: null,
+                message: "Click Detect M495 Support for this printer connection."});
             self.firmware(data.firmware || {state: "unknown", protocol: null, label: "Not detected",
                 allowed_shapers: [], message: "Firmware detection is required before calibration."});
             if (data.result) {
@@ -172,6 +207,8 @@ $(function () {
             self.error("");
             self.summary("");
             self.progress(0);
+            self.progressSource("");
+            self.sensorState("");
             self.busy(true);
             if (clearResult) self.result(null);
             return OctoPrint.simpleApiCommand("Pinput_Shaping", command, payload || {})
@@ -195,13 +232,25 @@ $(function () {
         self.detectFirmware = function () {
             if (self.available()) request("detect_firmware", {}, false);
         };
+        self.detectM495 = function () {
+            if (self.available()) request("detect_m495", {}, false);
+        };
         self.runAxisTest = function (axis) {
             if (self.canMove()) request("run_axis_test", position(axis), true);
         };
         self.runResonance = function (axis) {
-            if (!self.canMove()) return;
-            if (confirm("Start " + axis + " resonance calibration? The printer will home and move at the selected position. Check sensor mounting and clear the travel area.")) {
-                request("run_resonance_test", position(axis), true);
+            if (!self.canCalibrate()) return;
+            const movement = self.nativeSelected() ? "Marlin M495 will home and move to its internal test position." :
+                "The printer will home and move at the selected position.";
+            if (confirm("Start " + axis + " resonance calibration? " + movement + " Check sensor mounting and clear the travel area.")) {
+                const payload = position(axis);
+                payload.data.backend = self.excitationBackend();
+                if (self.nativeSelected()) {
+                    payload.data.native_settings = {};
+                    ["nativeStart", "nativeEnd", "nativeOctave", "nativeAccel", "nativePrepareTimeout",
+                        "nativeMaxCapture", "nativeCancelTimeout"].forEach(key => { payload.data.native_settings[key] = self[key](); });
+                }
+                request("run_resonance_test", payload, true);
             }
         };
         self.cancel = function () {
@@ -225,8 +274,8 @@ $(function () {
         };
         self.recover = function () {
             if (self.busy()) return;
-            if (confirm("Restore the firmware settings saved before the interrupted calibration? Confirm this is the same printer.")) {
-                request("recover", {}, false);
+            if (confirm("Recover the interrupted calibration? Confirm this is the same printer. For native M495 recovery after a disconnect or reset, first verify the printer is fully stopped or reset. Recovery sends M496 and drains its queued acknowledgment before verifying settings.")) {
+                request("recover", {native_idle_confirmed: true}, false);
             }
         };
 
@@ -244,7 +293,11 @@ $(function () {
             if (plugin !== "Pinput_Shaping") return;
             if (data.type === "state") updateState(data);
             else if (data.type === "results_ready") showResult(data.result);
-            else if (data.type === "progress") self.progress(Math.round(data.progress * 100));
+            else if (data.type === "progress") {
+                self.progress(Math.round(data.progress * 100));
+                self.progressSource(data.progress_source || "");
+                self.sensorState(data.sensor_state || "");
+            }
             else if (data.type === "sensor_values") {
                 self.samples(data.samples);
                 self.summary(data.summary);

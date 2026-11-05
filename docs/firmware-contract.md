@@ -38,6 +38,14 @@ The Python 3.9/3.11/3.12 CI matrix is configured but has not run remotely for
 these uncommitted changes. No installer, physical printer test, firmware flash,
 commit or push was performed during this review.
 
+The PIS:RT v2 host-arming follow-up passed 307 pytest checks, the live c13
+144-case shaping comparison, all six native lifecycle C++ harness variants,
+and frontend checks with both offline interfaces and OctoPrint Knockout.
+The STM32F103RET6_creality build compiled successfully. Against an isolated
+baseline with identical current configuration/version, v2 uses 28,468 bytes
+static RAM (+8) and 254,652 bytes flash (+1,384). It leaves native equations and
+software excitation unchanged. No physical printer or firmware flash was used.
+
 ## Reference firmware
 
 This branch was checked against the local `Marlin_c13_octoprint` checkout at
@@ -52,9 +60,13 @@ are 5000 mm/s² and serial baud rate is 115200. These are reference values:
 calibration uses the active printer profile and live reports rather than
 substituting factory defaults for missing runtime settings.
 
-`RESONANCE_TEST` is disabled. The plugin therefore does not send `M495` or
-`M496`. FTM's native resonance generator would need a separately reviewed
-firmware change and its own completion/abort protocol before adoption.
+That original coefficient review had `RESONANCE_TEST` disabled. The current
+c13 checkout implements instrumented M495 with backward-compatible PIS:RT v1
+events and an explicitly negotiated v2 host-arming barrier. Native calibration
+requires v2; v1 detection and recovery remain supported.
+The optional [native M495 backend](native-m495.md) uses that explicit runtime
+contract only after manual capability detection. Software excitation remains
+the default; M495/M496 are not sent on connection or by software calibration.
 
 ## Runtime protocol
 
@@ -72,8 +84,11 @@ replace those checks.
 
 Before modifying settings, the worker reads `M503`, `M220` and `M114`, then
 checks `M493 V` and `M494` when FTM is present. Reports must contain complete
-axis settings and motion limits. FTM must be active, use static shaping and
-have a trapezoidal trajectory without additional smoothing.
+axis settings and motion limits. Software calibration requires FTM to be
+active, with static shaping and a trapezoidal trajectory without additional
+smoothing. Native calibration also permits FTM's standard-motion mode (S0),
+while preserving the reviewed static shaping/trajectory requirements. It does
+not activate FTM when applying an axis configuration measured in S0.
 
 | Shaper | FTM `C` ID | Impulses |
 | --- | --- | --- |
@@ -118,6 +133,10 @@ build requires checking its configuration and rerunning the contract test;
 an FTM version response alone cannot establish binary equivalence.
 
 ## Motion and measurement limits
+
+The following excitation/PSD details describe the default software backend.
+Native M495 uses firmware-owned motion, COMPLETE/M496 lifecycle events and a
+separate frequency-aware response adapter; see [its contract](native-m495.md).
 
 Excitation and the analysis frequency range are separate. The controller uses
 an acceleration sweep derived from the original plugin: center/high/center/low
@@ -204,6 +223,13 @@ A disconnect or process termination preserves the journal. Recovery verifies
 the profile and protocol, but the operator must confirm that the same physical
 printer is connected. Results cannot be applied across a reconnect or after
 firmware settings have changed.
+
+These rollback/emergency rules describe software measurements and setting
+application. Native excitation does not modify shaping/motion settings, uses
+M496 for ordinary cancellation, and verifies stop before settings reads. Lost
+communication does not prove stopped motion. Its durable journal requires
+explicit recovery; no M112 is emitted automatically for a native stop timeout.
+Recovery verifies untouched settings rather than blindly restoring them.
 
 ## Sensor installation and remaining limitations
 

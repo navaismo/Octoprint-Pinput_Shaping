@@ -37,10 +37,14 @@ const confirmations = [];
 vm.createContext(context);
 vm.runInContext(fs.readFileSync("octoprint_Pinput_Shaping/static/js/pinput_shaping.js", "utf8"), context);
 const settings = {};
-for (const key of ["accelMin", "accelMax", "freqStart", "freqEnd", "sweepDuration", "dampingRatio", "sensorType", "sensorAxis", "sensorPort", "lis2dwRate"]) {
+for (const key of ["accelMin", "accelMax", "freqStart", "freqEnd", "sweepDuration", "dampingRatio", "sensorType", "sensorAxis", "sensorPort", "lis2dwRate",
+    "excitationBackend", "nativeStart", "nativeEnd", "nativeOctave", "nativeAccel", "nativePrepareTimeout", "nativeMaxCapture", "nativeCancelTimeout"]) {
     settings[key] = observable(1);
 }
 settings.lis2dwRate(1600);
+const nativeDefaults = {excitationBackend: "software", nativeStart: 20, nativeEnd: 60, nativeOctave: 20,
+    nativeAccel: 40, nativePrepareTimeout: 180, nativeMaxCapture: 300, nativeCancelTimeout: 200};
+for (const [key, value] of Object.entries(nativeDefaults)) settings[key](value);
 const Model = context.OCTOPRINT_VIEWMODELS[0].construct;
 const model = new Model([{settings: {plugins: {Pinput_Shaping: settings}}},
     {isOperational: () => true, isPrinting: () => false}]);
@@ -129,4 +133,59 @@ assert.equal(model.result(), null);
 assert.equal(model.canApply(), false, "Connection invalidation immediately disables application");
 model.detectFirmware();
 assert.equal(requests.at(-1).command, "detect_firmware");
-console.log("Firmware gating, prefix-aware downloads, atomic results and server-side application checks passed.");
+model.busy(false);
+model.firmware(ftm);
+model.modesReady(true);
+assert.equal(model.excitationBackend(), "software");
+model.excitationBackend("marlin_m495");
+model.nativeEnd(65);
+model.onSettingsBeforeSave();
+assert.equal(settings.excitationBackend(), "marlin_m495");
+assert.equal(settings.nativeEnd(), 65);
+assert.equal(settings.lis2dwRate(), 800, "Backend selection never changes the sensor rate");
+model.nativeEnd(60);
+assert.equal(model.canCalibrate(), false, "Native calibration requires its own confirmed capability");
+const beforeUnsupported = requests.length;
+model.runResonance("X");
+assert.equal(requests.length, beforeUnsupported, "There is no silent software fallback");
+model.detectM495();
+assert.equal(requests.at(-1).command, "detect_m495");
+model.busy(false);
+model.nativeCapability({state: "supported", protocol: 1, message: "Confirmed"});
+assert.equal(model.canCalibrate(), false, "PIS v1 lacks the required host-arming barrier");
+model.nativeCapability({state: "supported", protocol: 2, message: "Confirmed"});
+assert.equal(model.canCalibrate(), true);
+for (const [key, invalid] of [["nativeStart", 4], ["nativeEnd", 201], ["nativeOctave", 19],
+    ["nativeAccel", 0], ["nativeMaxCapture", 30], ["nativeStart", 20.001]]) {
+    const previous = model[key]();
+    model[key](invalid);
+    assert.ok(model.nativeValidation());
+    assert.equal(model.canCalibrate(), false);
+    model[key](previous);
+}
+model.onDataUpdaterPluginMessage("Pinput_Shaping", {type: "progress", progress: 0.95,
+    progress_source: "estimated from elapsed time", sensor_state: "capturing"});
+assert.equal(model.progress(), 95);
+assert.match(model.progressSource(), /estimated/);
+assert.equal(model.sensorState(), "capturing");
+model.runResonance("X");
+assert.equal(requests.at(-1).command, "run_resonance_test");
+assert.match(confirmations.at(-1), /Marlin M495 will home/);
+assert.equal(model.progressSource(), "", "New sessions clear old progress labels");
+model.busy(false);
+const diagnostic = {...result, backend: "marlin_m495", base_freq: null, best_shaper: null,
+    best_shaper_freq: null, shapers: {}, recommendation_valid: false};
+model.onDataUpdaterPluginMessage("Pinput_Shaping", {type: "results_ready", result: diagnostic});
+assert.equal(model.result().recommendation_valid, false, "A diagnostic response remains viewable");
+assert.equal(model.canApply(), false);
+model.onDataUpdaterPluginMessage("Pinput_Shaping", {type: "results_ready",
+    result: {...result, recommendation_valid: false}});
+assert.equal(model.canApply(), false, "An invalid recommendation stays blocked even if it contains shapers");
+currentState = {busy: false, modes_ready: false, firmware: ftm, native_capability: {state: "unknown"},
+    diagnostics: {session_id: "c".repeat(32), files: {events: "protocol_events.json"}}};
+const beforeReconnect = requests.length;
+model.onServerReconnect();
+assert.equal(model.canCalibrate(), false);
+assert.equal(requests.length, beforeReconnect, "Reconnect invalidation never probes automatically");
+assert.match(model.fileURL("events"), /cccccccccccccccccccccccccccccccc\/protocol_events.json$/);
+console.log("Firmware/native gating, persisted settings, diagnostics, progress and server-side application checks passed.");

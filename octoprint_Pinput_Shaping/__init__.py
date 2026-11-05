@@ -11,6 +11,7 @@ from octoprint.access.permissions import Permissions
 from octoprint.server.util.flask import restricted_access
 
 from .calibration import CalibrationController
+from .native_protocol import DEFAULTS as NATIVE_DEFAULTS
 
 
 class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
@@ -49,7 +50,8 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
         return {"sizeX": volume["width"], "sizeY": volume["depth"], "sizeZ": volume["height"],
                 "accelMin": 300, "accelMax": 2500, "freqStart": 5, "freqEnd": 132,
                 "sweepDuration": 20, "dampingRatio": "0.05",
-                "sensorType": "adxlspi", "sensorAxis": "sum", "sensorPort": "", "lis2dwRate": 800}
+                "sensorType": "adxlspi", "sensorAxis": "sum", "sensorPort": "", "lis2dwRate": 800,
+                **NATIVE_DEFAULTS}
 
     def get_template_configs(self):
         return [
@@ -65,7 +67,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
     def on_after_startup(self):
         self.configure_logger()
         keys = ("accelMin", "accelMax", "freqStart", "freqEnd", "sweepDuration",
-                "dampingRatio", "sensorType", "sensorAxis", "sensorPort", "lis2dwRate")
+                "dampingRatio", "sensorType", "sensorAxis", "sensorPort", "lis2dwRate", *NATIVE_DEFAULTS)
         self.controller = CalibrationController(
             self._printer, self._printer_profile_manager.get_current_or_default,
             lambda: {key: self._settings.get([key]) for key in keys},
@@ -92,7 +94,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
     def get_api_commands(self):
         return {"run_axis_test": ["data"], "run_accelerometer_test": [],
                 "run_resonance_test": ["data"], "prepare_modes": [],
-                "cancel": [], "apply_result": ["session_id"], "recover": [], "detect_firmware": []}
+                "cancel": [], "apply_result": ["session_id"], "recover": [], "detect_firmware": [], "detect_m495": []}
 
     def is_api_protected(self):
         return True
@@ -112,7 +114,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
             return flask.make_response("Plugin is starting", 503)
         operations = {"run_axis_test": "axis", "run_accelerometer_test": "sensor",
                       "run_resonance_test": "resonance", "prepare_modes": "prepare",
-                      "apply_result": "apply", "recover": "recover", "detect_firmware": "detect"}
+                      "apply_result": "apply", "recover": "recover", "detect_firmware": "detect", "detect_m495": "detect_native"}
         try:
             if command == "cancel":
                 self.controller.cancel()
@@ -136,11 +138,14 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
     def run_file(self, run_id, filename):
         if not Permissions.STATUS.can():
             flask.abort(403)
-        if not re.fullmatch(r"[a-f0-9]{32}", run_id) or filename not in ("signal.png", "psd.png", "capture.csv"):
+        if not re.fullmatch(r"[a-f0-9]{32}", run_id) or filename not in (
+                "signal.png", "psd.png", "capture.csv", "capture.csv.meta.json", "capture.csv.log",
+                "protocol_events.json", "excitation.json", "analysis.json", "configuration.json",
+                "sensor_check.csv", "sensor_check.csv.log", "sensor_check.csv.meta.json"):
             flask.abort(404)
         directory = Path(self.get_plugin_data_folder()) / "runs" / run_id
         return flask.send_from_directory(str(directory), filename,
-                                         as_attachment=filename.endswith(".csv"))
+                                         as_attachment=filename.endswith((".csv", ".json", ".log")))
 
     def gcode_received_handler(self, comm, line, *args, **kwargs):
         if self.controller:
@@ -154,7 +159,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
 
     def gcode_sent_handler(self, comm, phase, cmd, cmd_type, gcode, *args, **kwargs):
         if self.controller:
-            self.controller.sent(cmd, gcode)
+            self.controller.sent(cmd, gcode, kwargs.get("tags"))
 
     def gcode_sending_handler(self, comm, phase, cmd, cmd_type, gcode, *args, **kwargs):
         if self.controller:

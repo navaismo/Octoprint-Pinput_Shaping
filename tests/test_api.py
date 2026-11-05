@@ -31,7 +31,7 @@ def test_control_permission_is_required_for_every_mutating_api_action(api, monke
     app, plugin = api
     monkeypatch.setattr(Permissions.CONTROL, "can", lambda: False)
     with app.test_request_context():
-        for command in ("run_axis_test", "run_resonance_test", "apply_result", "recover", "cancel", "prepare_modes", "detect_firmware"):
+        for command in ("run_axis_test", "run_resonance_test", "apply_result", "recover", "cancel", "prepare_modes", "detect_firmware", "detect_m495"):
             assert plugin.on_api_command(command, {}).status_code == 403
 
 
@@ -90,3 +90,36 @@ def test_api_accepts_a_shaper_name_and_rejects_parameter_overrides(api):
         response, code = plugin.on_api_command("apply_result", {"session_id": "a" * 32, "shaper": "MZV"})
         assert code == 202
         assert received == [("apply", {"session_id": "a" * 32, "shaper": "MZV"})]
+
+
+def test_native_detection_uses_a_separate_manual_api_operation(api):
+    app, plugin = api
+    received = []
+    plugin.controller.submit = lambda kind, data: received.append((kind, data)) or "a" * 32
+    with app.test_request_context():
+        response, code = plugin.on_api_command("detect_m495", {})
+        assert code == 202
+        assert response.get_json()["session_id"] == "a" * 32
+    assert received == [("detect_native", {})]
+
+
+def test_native_defaults_preserve_software_backend_and_lis800(api):
+    _, plugin = api
+    plugin._printer_profile_manager.get_current_or_default = lambda: {"volume": dict(width=220, depth=220, height=250)}
+    defaults = plugin.get_settings_defaults()
+    assert defaults["excitationBackend"] == "software"
+    assert defaults["lis2dwRate"] == 800
+    assert [defaults[key] for key in ("nativeStart", "nativeEnd", "nativeOctave", "nativeAccel")] == [20, 60, 20, 40]
+
+
+@pytest.mark.parametrize("filename", ["capture.csv.meta.json", "capture.csv.log", "protocol_events.json",
+                                     "excitation.json", "analysis.json", "configuration.json", "sensor_check.csv"])
+def test_native_diagnostics_downloads_use_authenticated_whitelisted_route(api, tmp_path, filename):
+    app, _ = api
+    folder = tmp_path / "runs" / ("a" * 32)
+    folder.mkdir(parents=True)
+    (folder / filename).write_text("{}")
+    response = app.test_client().get("/file/" + "a" * 32 + "/" + filename)
+    assert response.status_code == 200
+    assert "attachment" in response.headers["Content-Disposition"]
+    response.close()

@@ -138,13 +138,13 @@ def wait_until(condition):
         time.sleep(0.01)
 
 
-def simulated_driver(tmp_path, monkeypatch, script):
+def simulated_driver(tmp_path, monkeypatch, script, sensor="adxlusb"):
     path = tmp_path / "capture.csv"
     spawn = pexpect.spawn
     monkeypatch.setattr(module.shutil, "which", lambda name: sys.executable)
     monkeypatch.setattr(module.pexpect, "spawn", lambda executable, args, **kwargs:
                         spawn(sys.executable, ["-u", "-c", script, str(path)], **kwargs))
-    return AccelerometerCapture("adxlusb", path)
+    return AccelerometerCapture(sensor, path)
 
 
 DRIVER_START = """
@@ -193,6 +193,27 @@ sys.exit(4)
         capture.abort()
 
 
+@pytest.mark.parametrize("device_error", ["CLIPPING", "BUFFER_OVERFLOW:acq=5304:fmt=5047:usb_ok=3353:usb_busy=8582"])
+def test_device_rejection_reason_is_visible_in_the_reported_sensor_error(tmp_path, monkeypatch, device_error):
+    capture = simulated_driver(tmp_path, monkeypatch, DRIVER_START + f"""
+sys.stdin.readline()
+print('Device error: {device_error}', flush=True)
+print('Captured 3759 samples; Firmware rejected or invalidated this capture', flush=True)
+sys.exit(2)
+""", sensor="lis2dw")
+    try:
+        capture.start()
+        capture.child.sendline("fail")
+        wait_until(lambda: not capture._is_alive())
+        with pytest.raises(RuntimeError, match="exited during measurement") as error:
+            capture.ensure_alive()
+        assert "lis2dwusb" in str(error.value)
+        assert "exit code 2" in str(error.value)
+        assert f"device error: {device_error}" in str(error.value)
+    finally:
+        capture.abort()
+
+
 def test_exit_before_ready_preserves_the_driver_error(tmp_path, monkeypatch):
     capture = simulated_driver(tmp_path, monkeypatch, "import sys; sys.stderr.write('sensor unavailable\\n'); sys.exit(2)")
     with pytest.raises(RuntimeError, match="exited before becoming ready") as error:
@@ -200,6 +221,47 @@ def test_exit_before_ready_preserves_the_driver_error(tmp_path, monkeypatch):
     assert "exit code 2" in str(error.value)
     assert capture.logfile.closed
     assert "sensor unavailable" in Path(capture.path + ".log").read_text()
+
+
+def test_native_readiness_observes_fresh_timestamped_samples(tmp_path, monkeypatch):
+    capture = simulated_driver(tmp_path, monkeypatch, DRIVER_START + """
+import time
+for first in range(20, 120, 20):
+    time.sleep(0.04)
+    with path.open('a') as stream:
+        stream.write(''.join(f'{i / 3200},0,0,1\\n' for i in range(first, first + 20)))
+assert sys.stdin.readline().strip() == 'Q'
+""", sensor="lis2dw")
+    try:
+        capture.prepare()
+        assert capture.child is None and not Path(capture.path).exists()
+        capture.start()
+        observed = capture.wait_ready()
+        assert observed["observations"] == 2
+        assert observed["last_timestamp"] > observed["previous_last_timestamp"]
+        assert capture.host_times["samples_verified"] >= capture.host_times["ready"]
+        capture.stop()
+    finally:
+        capture.abort()
+
+
+@pytest.mark.parametrize("failure", ["stalled", "duplicate", "reverse", "nonfinite"])
+def test_native_readiness_rejects_stale_or_invalid_samples(tmp_path, monkeypatch, failure):
+    additions = {"stalled": "", "duplicate": "0.0059375,0,0,1\\n",
+                 "reverse": "0.001,0,0,1\\n", "nonfinite": "nan,0,0,1\\n"}
+    capture = simulated_driver(tmp_path, monkeypatch, DRIVER_START + f"""
+import time
+time.sleep(0.04)
+with path.open('a') as stream:
+    stream.write({additions[failure]!r})
+sys.stdin.readline()
+""", sensor="lis2dw")
+    try:
+        capture.start()
+        with pytest.raises(RuntimeError, match="timestamp|new.*samples"):
+            capture.wait_ready(timeout=0.3)
+    finally:
+        capture.abort()
 
 
 @pytest.mark.parametrize("path", ["/tmp/sensor", "/dev/ttyACM0 -s /etc/passwd", "/dev/serial/by-id/../../ttyUSB0"])

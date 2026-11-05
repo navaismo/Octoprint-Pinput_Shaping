@@ -95,7 +95,7 @@ class FirmwareSnapshot:
             return "legacy"
         raise ValueError("No supported input-shaping settings in M503 report")
 
-    def validate(self, axis):
+    def validate(self, axis, allow_standard=False):
         for code, keys in {"M92": "XYZ", "M201": "XYZ", "M203": "XYZ",
                            "M204": "PRT", "M205": "BST"}.items():
             if not set(keys).issubset(self.reports.get(code, {})):
@@ -111,7 +111,7 @@ class FirmwareSnapshot:
         if self.mode == "ftm":
             if self.ftm_version != 2:
                 raise ValueError("Only the verified FTM v2 M493 protocol is supported")
-            if self.ftm_global.get("S") != 1 or self.ftm_global.get("D", 0) != 0:
+            if (self.ftm_global.get("S") != 1 and not (allow_standard and self.ftm_global.get("S") == 0)) or self.ftm_global.get("D", 0) != 0:
                 raise ValueError("Enable FTM with static shaping before calibration")
             if self.trajectory != 0 or any(v != 0 for v in self.smoothing.values()):
                 raise ValueError("Host calibration requires trapezoidal FTM without extra smoothing")

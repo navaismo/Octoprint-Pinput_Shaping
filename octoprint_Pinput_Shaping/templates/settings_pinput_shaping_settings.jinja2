@@ -3,6 +3,42 @@
     <p>Travel dimensions come from the active OctoPrint printer profile.
         Changes apply to the next calibration session.</p>
     <form class="form-horizontal">
+        <h4>Resonance Excitation</h4>
+        <div class="control-group">
+            <label class="control-label" for="pinput-backend">Resonance Excitation Backend</label>
+            <div class="controls"><select id="pinput-backend" data-bind="value: excitationBackend, disable: busy">
+                <option value="software">Software-generated Sweep (Legacy)</option>
+                <option value="marlin_m495">Native Marlin (M495)</option>
+            </select><p class="help-block">Save settings before starting calibration. Native movement is generated inside Marlin.</p></div>
+        </div>
+        <div class="alert alert-info">
+            Firmware: <strong data-bind="text: firmware().label"></strong>.
+            <button class="btn btn-small" data-bind="click: detectFirmware, enable: available">Detect firmware</button>
+        </div>
+            <div class="alert alert-info" aria-live="polite">
+                Native Marlin Resonance — M495 host events:
+                <strong data-bind="text: nativeCapability().state"></strong>.
+                Protocol: <span data-bind="text: nativeCapability().protocol ? 'PIS:RT v' + nativeCapability().protocol : 'Unknown'"></span>.
+                <span data-bind="text: nativeCapability().message"></span>
+                <button class="btn btn-small" data-bind="click: detectM495, enable: available">Detect M495 Support</button>
+            </div>
+        <div data-bind="visible: nativeSelected">
+            <div class="alert alert-error" data-bind="visible: nativeValidation, text: nativeValidation"></div>
+            <div class="control-group"><label class="control-label" for="pinput-native-start">Start frequency (Hz)</label>
+                <div class="controls"><input id="pinput-native-start" type="number" min="5" max="199.99" step="0.01" data-bind="value: nativeStart, disable: busy"></div></div>
+            <div class="control-group"><label class="control-label" for="pinput-native-end">End frequency (Hz)</label>
+                <div class="controls"><input id="pinput-native-end" type="number" min="5.01" max="200" step="0.01" data-bind="value: nativeEnd, disable: busy"></div></div>
+            <div class="control-group"><label class="control-label" for="pinput-native-octave">Seconds per octave</label>
+                <div class="controls"><input id="pinput-native-octave" type="number" min="20" max="60" step="0.01" data-bind="value: nativeOctave, disable: busy"></div></div>
+            <div class="control-group"><label class="control-label" for="pinput-native-accel">Acceleration per Hz</label>
+                <div class="controls"><input id="pinput-native-accel" type="number" min="0.0001" step="0.0001" data-bind="value: nativeAccel, disable: busy"></div></div>
+            <div class="control-group"><label class="control-label" for="pinput-native-prep">Preparation timeout (s)</label>
+                <div class="controls"><input id="pinput-native-prep" type="number" min="30" max="240" data-bind="value: nativePrepareTimeout, disable: busy"></div></div>
+            <div class="control-group"><label class="control-label" for="pinput-native-cap">Maximum capture (s)</label>
+                <div class="controls"><input id="pinput-native-cap" type="number" min="30" max="480" data-bind="value: nativeMaxCapture, disable: busy"></div></div>
+            <div class="control-group"><label class="control-label" for="pinput-native-cancel">Cancellation timeout (s)</label>
+                <div class="controls"><input id="pinput-native-cancel" type="number" min="10" max="300" data-bind="value: nativeCancelTimeout, disable: busy"></div></div>
+        </div>
         <div class="control-group">
             <label class="control-label" for="pinput-sensor">Accelerometer</label>
             <div class="controls"><select id="pinput-sensor" data-bind="value: sensorType, disable: busy">
@@ -32,25 +68,25 @@
                 <option value="y">Sensor Y</option><option value="z">Sensor Z</option>
             </select><p class="help-block">Combined spectra tolerate different sensor orientations.</p></div>
         </div>
-        <div class="control-group">
+        <div class="control-group" data-bind="visible: !nativeSelected()">
             <label class="control-label" for="pinput-accel-min">Start acceleration (mm/s²)</label>
             <div class="controls"><input id="pinput-accel-min" type="number" min="1" data-bind="value: accelMin, disable: busy"></div>
         </div>
         <div class="control-group">
-            <label class="control-label" for="pinput-accel-max">Maximum acceleration (mm/s²)</label>
+            <label class="control-label" for="pinput-accel-max" data-bind="text: nativeSelected() ? 'Shaper smoothing ceiling (mm/s²)' : 'Maximum acceleration (mm/s²)'"></label>
             <div class="controls"><input id="pinput-accel-max" type="number" min="1" data-bind="value: accelMax, disable: busy">
-                <p class="help-block">Must fit the reported firmware limit. This controls the excitation strength.</p></div>
+                <p class="help-block" data-bind="text: nativeSelected() ? 'Caps the theoretical shaper acceleration estimate. Native excitation uses acceleration per Hz above.' : 'Must fit the reported firmware limit. This controls the excitation strength.'"></p></div>
         </div>
-        <div class="control-group">
+        <div class="control-group" data-bind="visible: !nativeSelected()">
             <label class="control-label" for="pinput-freq-start">Analysis start (Hz)</label>
             <div class="controls"><input id="pinput-freq-start" type="number" min="5" max="199" data-bind="value: freqStart, disable: busy">
                 <p class="help-block">Shaper fitting uses measured frequencies at or above 20 Hz.</p></div>
         </div>
-        <div class="control-group">
+        <div class="control-group" data-bind="visible: !nativeSelected()">
             <label class="control-label" for="pinput-freq-end">Analysis end (Hz)</label>
             <div class="controls"><input id="pinput-freq-end" type="number" min="21" max="200" data-bind="value: freqEnd, disable: busy"></div>
         </div>
-        <div class="control-group">
+        <div class="control-group" data-bind="visible: !nativeSelected()">
             <label class="control-label" for="pinput-sweep-duration">Excitation duration (s)</label>
             <div class="controls"><input id="pinput-sweep-duration" type="number" min="10" max="120" data-bind="value: sweepDuration, disable: busy">
                 <p class="help-block">Target duration; complete motion cycles may take longer.</p></div>
@@ -63,7 +99,9 @@
             </select></div>
         </div>
     </form>
-    <p>The test varies acceleration over 1–5 mm strokes. The analysis range selects which measured vibration frequencies to inspect.</p>
+    <p data-bind="visible: !nativeSelected()">The software test varies acceleration over 1–5 mm strokes. The analysis range selects which measured vibration frequencies to inspect.</p>
+    <p data-bind="visible: nativeSelected">M495 controls homing, positioning and the frequency sweep inside Marlin.
+        Native calibration requires protocol-2 LIS2DW metadata and the PIS:RT v2 host-arming barrier with reliable acquisition throughout excitation.</p>
     <p>LIS2DW calibration requires a wrapper that preserves precise, strictly increasing acquisition timestamps.
         Captures with rounded or duplicate timestamps are rejected.</p>
 </div>

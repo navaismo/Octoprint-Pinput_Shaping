@@ -49,7 +49,7 @@ class Printer:
         if not self.silent:
             self.controller.receive(line)
 
-    def commands(self, commands, tags=None):
+    def commands(self, commands, tags=None, force=False):
         if isinstance(commands, str):
             commands = [commands]
         # OctoPrint queues commands before the serial sender processes them.
@@ -62,7 +62,7 @@ class Printer:
             if self.controller.sending(cmd, gcode, tags) == (None,):
                 continue
             self.sent_commands.append(cmd)
-            self.controller.sent(cmd, gcode)
+            self.controller.sent(cmd, gcode, tags)
             values = parameters(cmd[len(gcode):])
             self.clock.advance(0.0001)
             if gcode == "M118":

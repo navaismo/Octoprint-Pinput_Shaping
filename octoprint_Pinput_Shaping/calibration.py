@@ -15,6 +15,8 @@ import uuid
 from .capture import AccelerometerCapture
 from .firmware import FirmwareSnapshot, SHAPER_IDS, finite_number, shaping_command
 from .motion import bounds_from_profile, plan_excitation, validate_position
+from .native import NativeResonanceMixin
+from .native_protocol import NativeParameters
 
 
 TAG = "plugin:Pinput_Shaping"
@@ -42,10 +44,19 @@ class Session:
     transport_fault: bool = False
     snapshot: object = None
     modes: dict = field(default_factory=dict)
+    native_mode: bool = False
+    native_sent: bool = False
+    native_stopped: bool = False
+    firmware_id: int = None
+    native_events: list = field(default_factory=list)
+    native_commands: list = field(default_factory=list)
+    native_outgoing: object = field(default_factory=lambda: queue.Queue(maxsize=64), repr=False)
+    native_capture_error: str = None
+    native_idle_confirmed: bool = False
     deadline: float = field(default_factory=lambda: time.monotonic() + 600)
 
 
-class CalibrationController:
+class CalibrationController(NativeResonanceMixin):
     def __init__(self, printer, profile, settings, data_folder, publish,
                  logger=None, capture_factory=AccelerometerCapture, analyzer_factory=None):
         self.printer = printer
@@ -64,9 +75,20 @@ class CalibrationController:
         self.result = None
         self.error = None
         self.firmware = self._unknown_firmware()
+        self.native_capability = self._unknown_native()
+        self.native_connection = None
+        self.native_diagnostics = None
+        self._firmware_identity = None
         self._shutting_down = False
         self.modes = dict(units=None, xyz=None, extruder=None, feed=None)
         self.journal = self.data_folder / "recovery_required.json"
+        self.native_unresolved = False
+        if self.journal.exists():
+            try:
+                with self.journal.open(encoding="utf-8") as stream:
+                    self.native_unresolved = json.load(stream).get("native_only", False)
+            except (OSError, ValueError):
+                self.native_unresolved = True
 
     @staticmethod
     def _unknown_firmware():
@@ -82,9 +104,13 @@ class CalibrationController:
             except ValueError:
                 protocol = None
             ftm_label = f"FTM v{snapshot.ftm_version} (M493)" if snapshot and snapshot.ftm_version else "FTM (M493)"
+            label = {"ftm": ftm_label, "legacy": "Legacy ZV (M593)"}.get(protocol, "Not detected")
+            if self.firmware["protocol"] is not None and (protocol, label) != (self.firmware["protocol"], self.firmware["label"]):
+                self.native_capability = self._unknown_native("Firmware identification changed; detect M495 again.")
+                self.native_connection = None
             self.firmware = {
                 "state": "unsupported" if error else "ready", "protocol": protocol,
-                "label": {"ftm": ftm_label, "legacy": "Legacy ZV (M593)"}.get(protocol, "Not detected"),
+                "label": label,
                 "allowed_shapers": [] if error else (list(SHAPER_IDS) if protocol == "ftm" else ["ZV"]),
                 "message": error or ("Select a fitted shaper or use the recommendation." if protocol == "ftm"
                                      else "Only the recommended ZV settings can be applied; advanced shapers are unavailable."),
@@ -99,17 +125,25 @@ class CalibrationController:
 
     def status(self):
         with self.lock:
+            if self.native_connection and self.native_connection != tuple(self.printer.get_current_connection()[1:3]):
+                self.native_capability = self._unknown_native("Printer transport changed; detect again.")
+                self.native_connection = None
+                if self.result and self.result.get("backend") == "marlin_m495":
+                    self.result = None
+                self.cancel("Printer transport changed during calibration")
             return {"busy": self.session is not None,
                     "session_id": self.session.id if self.session else None,
                     "stage": self.session.stage if self.session else "idle",
                     "error": self.error, "result": deepcopy(self.result),
                     "firmware": deepcopy(self.firmware),
+                    "native_capability": deepcopy(self.native_capability),
+                    "diagnostics": deepcopy(self.native_diagnostics),
                     "recovery_required": self.journal.exists() and self.session is None,
                     "modes_ready": all(v is not None for v in self.modes.values())}
 
     def submit(self, kind, data=None):
         data = data or {}
-        if kind not in ("sensor", "axis", "resonance", "apply", "recover", "prepare", "detect"):
+        if kind not in ("sensor", "axis", "resonance", "apply", "recover", "prepare", "detect", "detect_native"):
             raise ValueError("Unknown calibration operation")
         with self.lock:
             if self._shutting_down:
@@ -120,14 +154,33 @@ class CalibrationController:
                 raise RuntimeError("The printer must be connected and idle")
             if self.journal.exists() and kind != "recover":
                 raise RuntimeError("Restore the interrupted calibration before starting another operation")
-            if kind not in ("prepare", "sensor", "recover", "detect") and self.modes["units"] != "G21":
+            if kind not in ("prepare", "sensor", "recover", "detect", "detect_native") and self.modes["units"] != "G21":
                 raise RuntimeError("Prepare millimeter coordinate modes before calibration")
             settings, profile = deepcopy(self.settings()), deepcopy(self.profile())
             axis = data.get("axis", "X")
+            if kind == "resonance" and data.get("backend", settings.get("excitationBackend", "software")) != settings.get("excitationBackend", "software"):
+                raise ValueError("Save plugin settings before calibration; the selected backend differs from the saved backend")
+            native = kind == "resonance" and settings.get("excitationBackend", "software") == "marlin_m495"
+            if kind == "resonance" and settings.get("excitationBackend", "software") not in ("software", "marlin_m495"):
+                raise ValueError("Unsupported excitation backend")
+            if native:
+                parameters = NativeParameters.from_settings(settings)
+                if "native_settings" in data:
+                    if not isinstance(data["native_settings"], dict):
+                        raise ValueError("Native settings must be an object")
+                    if NativeParameters.from_settings({**settings, **data["native_settings"]}) != parameters:
+                        raise ValueError("Save native settings before calibration; the parameters differ from the saved values")
+                if (self.native_capability["state"] != "supported" or self.native_capability.get("protocol") != 2
+                        or self.native_connection != tuple(self.printer.get_current_connection()[1:3])):
+                    raise RuntimeError("Detect M495 Support for the current connection before native calibration")
             position = {}
             if kind in ("axis", "resonance"):
-                position = validate_position(profile, axis, {"X": data.get("start_x"),
-                    "Y": data.get("start_y"), "Z": data.get("start_z")})
+                if native:
+                    if axis not in ("X", "Y"):
+                        raise ValueError("Native calibration supports X and Y only")
+                else:
+                    position = validate_position(profile, axis, {"X": data.get("start_x"),
+                        "Y": data.get("start_y"), "Z": data.get("start_z")})
                 if not all(v is not None for v in self.modes.values()):
                     raise RuntimeError("Prepare coordinate modes before calibration")
             if kind == "apply":
@@ -137,19 +190,28 @@ class CalibrationController:
                     raise ValueError("The result is stale or incomplete; run calibration again")
                 if self.result["connection"] != self.connection:
                     raise ValueError("The printer connection changed after calibration")
+                if self.result.get("recommendation_valid") is False:
+                    raise ValueError("This measurement has no validated recommendation")
                 axis = self.result["axis"]
                 shaper, _ = self._application_candidate(self.result, data.get("shaper", self.result["best_shaper"]))
             session = Session(kind, axis, settings, profile, position, self.connection)
+            session.native_idle_confirmed = kind == "recover" and data.get("native_idle_confirmed") is True
+            session.native_mode = native or (kind == "apply" and self.result.get("backend") == "marlin_m495")
+            if native:
+                session.deadline = time.monotonic() + parameters.preparation_timeout + parameters.max_capture + parameters.cancel_timeout + 60
+                self.native_diagnostics = None
             if kind == "apply":
                 session.shaper = shaper
             session.modes = deepcopy(self.modes)
             self.session = session
             self.error = None
-            if kind not in ("apply", "recover", "detect"):
+            if kind not in ("apply", "recover", "detect", "detect_native"):
                 self.result = None
             if kind == "detect":
                 self.firmware = {**self._unknown_firmware(), "state": "detecting",
                                  "message": "Reading firmware input-shaping settings."}
+            if kind == "detect_native":
+                self.native_capability = {**self._unknown_native(), "state": "detecting"}
             self.thread = threading.Thread(target=self._run, args=(session,), daemon=True,
                                            name=f"pinput-{session.id[:8]}")
             self.thread.start()
@@ -163,6 +225,14 @@ class CalibrationController:
 
     def receive(self, line):
         """Non-blocking serial callback: no file, process, or analysis work."""
+        if line.startswith(("FIRMWARE_NAME:", "echo:FIRMWARE_NAME:")):
+            identity = line.strip()
+            if self._firmware_identity is not None and identity != self._firmware_identity:
+                self.native_capability = self._unknown_native("Firmware identity changed; detect again.")
+                self.native_connection = None
+                self.result = None
+                self.cancel("Firmware identity changed during calibration")
+            self._firmware_identity = identity
         if self.session:
             try:
                 self.inbox.put_nowait((time.monotonic(), line))
@@ -172,6 +242,10 @@ class CalibrationController:
 
     def queuing(self, cmd, gcode, tags=None):
         session = self.session
+        # M110 is needed to establish OctoPrint's line-number handshake after
+        # reconnect, including when the native recovery journal is pending.
+        if not session and self.native_unresolved and gcode not in STATUS_COMMANDS | {"M112", "M496", "M110"}:
+            return (None,)
         if not session or gcode == "M112":
             return None
         if not cmd or not cmd.strip() or cmd.lstrip().startswith(";"):
@@ -183,7 +257,7 @@ class CalibrationController:
             return None
         if gcode in STATUS_COMMANDS:
             return None
-        if session.kind == "detect":
+        if session.kind in ("detect", "detect_native"):
             self.cancel(f"Firmware detection interrupted by command {gcode or 'unknown'}; click Detect firmware to retry")
             return None
         self.logger.warning("Calibration session %s (%s) blocked command %r, gcode=%r, tags=%r",
@@ -191,7 +265,19 @@ class CalibrationController:
         self.cancel(f"Command {gcode or 'unknown'} interrupted calibration; see Pinput_Shaping.log for its source")
         return (None,)
 
-    def sent(self, cmd, gcode):
+    def sent(self, cmd, gcode, tags=None):
+        session = self.session
+        tags = tags or set()
+        if gcode == "M495" and session and session.native_mode and " I" in cmd and re.search(r"\bS(?: W)?$", cmd):
+            session.native_sent = True
+        if (session and gcode in ("M495", "M496") and TAG in tags
+                and f"pinput:session:{session.id}" in tags):
+            # The worker writes diagnostics. Never perform log/file I/O on
+            # OctoPrint's serial sender thread.
+            try:
+                session.native_outgoing.put_nowait({"host_time": time.monotonic(), "command": cmd, "phase": "sent"})
+            except queue.Full:
+                self.cancel("Native transmission diagnostics overflowed")
         if gcode in ("G20", "G21"):
             self.modes["units"] = gcode
         elif gcode in ("G90", "G91"):
@@ -221,6 +307,9 @@ class CalibrationController:
                 self.connection += 1
                 self.result = None
                 self.firmware = self._unknown_firmware()
+                self.native_capability = self._unknown_native()
+                self.native_connection = None
+                self._firmware_identity = None
                 self.modes = dict(units=None, xyz=None, extruder=None, feed=None)
                 self.cancel("Printer connection was interrupted; recovery may be required")
             self.publish({"type": "state", **self.status()})
@@ -232,6 +321,9 @@ class CalibrationController:
             raise RuntimeError(session.reason)
         if session.connection != self.connection or self.printer.get_state_id() != "OPERATIONAL":
             raise RuntimeError("Printer is no longer idle on the original connection")
+        if session.native_mode and self.native_connection != tuple(self.printer.get_current_connection()[1:3]):
+            self.native_capability = self._unknown_native("Printer transport changed; detect again.")
+            raise RuntimeError("Printer transport changed during native calibration")
         if self.profile() != session.profile:
             raise RuntimeError("Printer profile changed during calibration")
         if time.monotonic() > session.deadline:
@@ -288,7 +380,7 @@ class CalibrationController:
                 lines, _ = self._exchange(session, ["M493 V", "M494"], recovery=recovery)
                 for line in lines:
                     result.feed(line)
-            result.validate(session.axis)
+            result.validate(session.axis, allow_standard=session.native_mode or session.kind in ("detect", "recover"))
         except Exception as exc:
             self._set_firmware(session, result, error=str(exc))
             raise
@@ -325,6 +417,8 @@ class CalibrationController:
         return commands
 
     def _restore(self, session):
+        if session.native_mode and session.kind in ("resonance", "recover"):
+            return self._native_restore(session)
         self._stage(session, "restoring")
         commands = ["M400"] + session.snapshot.restore_commands(full=session.kind == "recover",
             shaping_parameters=session.kind in ("apply", "recover")) + self._mode_commands(session.modes)
@@ -408,6 +502,14 @@ class CalibrationController:
         self._restore(session)
 
     def _resonance(self, session, folder):
+        backend = session.settings.get("excitationBackend", "software")
+        if backend == "marlin_m495":
+            return self._resonance_native(session, folder)
+        if backend != "software":
+            raise ValueError("Unsupported excitation backend")
+        return self._resonance_software(session, folder)
+
+    def _resonance_software(self, session, folder):
         limits = bounds_from_profile(session.profile)
         baud = self.printer.get_current_connection()[2] or 115200
         bands = plan_excitation(session.axis, session.position[session.axis], limits[session.axis],
@@ -475,17 +577,24 @@ class CalibrationController:
         analyzer = self._analyzer(session, folder / "capture.csv")
         analyzer.analyze()
         analyzer.generate_graphs()
+        return self._analysis_result(session, analyzer)
+
+    def _analysis_result(self, session, analyzer, backend="software", extra=None):
         payload = analyzer.get_plotly_data()
         for name, candidate in payload["shapers"].items():
             candidate["command"] = shaping_command(session.snapshot.mode, session.axis, name,
                 candidate["shaper_freq"], analyzer.damping, analyzer.tolerance)
         return {**payload, "session_id": session.id, "connection": session.connection,
-                "axis": session.axis, "command": analyzer.get_recommendation(),
+                "axis": session.axis, "command": analyzer.get_recommendation() if payload.get("best_shaper") else None,
                 "damping": analyzer.damping, "tolerance": analyzer.tolerance,
                 "firmware_mode": session.snapshot.mode, "quality": analyzer.quality,
                 "warnings": analyzer.warnings, "profile": session.profile,
                 "firmware_snapshot": asdict(session.snapshot),
-                "files": {"signal": "signal.png", "psd": "psd.png", "csv": "capture.csv"}}
+                "backend": backend,
+                "files": {"signal": "signal.png", "psd": "psd.png", "csv": "capture.csv",
+                    **({"events": "protocol_events.json", "excitation": "excitation.json", "analysis": "analysis.json",
+                        "metadata": "capture.csv.meta.json", "sensor_log": "capture.csv.log"} if backend == "marlin_m495" else {})},
+                **(extra or {})}
 
     @staticmethod
     def _application_candidate(result, name):
@@ -537,7 +646,7 @@ class CalibrationController:
         if backup["profile"] != session.profile:
             raise RuntimeError("Recovery belongs to a different printer profile")
         original = FirmwareSnapshot(**backup["snapshot"])
-        original.validate(session.axis)
+        original.validate(session.axis, allow_standard=True)
         if original.mode != session.snapshot.mode:
             raise RuntimeError("Recovery firmware protocol does not match this printer")
         session.snapshot, session.modes, session.changed = original, backup["modes"], True
@@ -559,6 +668,12 @@ class CalibrationController:
                 samples, count = self._sensor_test(session, folder / "sensor_check.csv")
                 self.publish({"type": "sensor_values", "samples": samples,
                               "summary": f"Captured {count} sensor samples"})
+            elif session.kind == "detect_native":
+                self._detect_native(session)
+            elif session.kind == "recover" and self.native_unresolved:
+                with self.journal.open(encoding="utf-8") as stream:
+                    self._recover_native(session, json.load(stream))
+                self.publish({"type": "completed", "message": "Native stop and printer settings verified. Prepare coordinate modes again."})
             else:
                 session.snapshot = self._snapshot(session)
                 if session.kind == "detect":
@@ -590,6 +705,9 @@ class CalibrationController:
                     elif self.firmware["state"] == "detecting":
                         self._set_firmware(session, error=str(exc))
             else:
+                if session.kind == "detect_native" and session.connection == self.connection:
+                    self.native_capability = {**self._unknown_native(), "state": "error", "message": str(exc)}
+                    self.native_connection = None
                 self.error = str(exc)
                 self.result = None
                 session.cancelled.set()
@@ -597,7 +715,8 @@ class CalibrationController:
                 self.logger.info("Firmware detection %s interrupted: %s", session.id, session.reason)
             else:
                 self.logger.exception("Calibration session %s failed", session.id)
-            if session.changed and (session.transport_fault or self.printer.get_state_id() not in ("OPERATIONAL", "OFFLINE", "CLOSED", "ERROR")):
+            if (not (session.native_mode and session.kind in ("resonance", "recover")) and session.changed
+                    and (session.transport_fault or self.printer.get_state_id() not in ("OPERATIONAL", "OFFLINE", "CLOSED", "ERROR"))):
                 self.printer.commands("M112", tags={TAG, RECOVERY_TAG})
         finally:
             if session.changed and not session.transport_fault:
@@ -606,13 +725,38 @@ class CalibrationController:
                 except Exception as exc:
                     self.error = f"{self.error or 'Calibration failed'}. Recovery required: {exc}"
                     self.logger.exception("Calibration restoration failed")
-                    if self.printer.get_state_id() == "OPERATIONAL":
+                    if self.printer.get_state_id() == "OPERATIONAL" and not (session.native_mode and session.kind in ("resonance", "recover")):
                         self.printer.commands("M112", tags={TAG, RECOVERY_TAG})
+            self._native_log_transmissions(session)
             if held:
                 try:
                     self.printer.set_job_on_hold(False)
                 except Exception:
                     self.logger.exception("Could not release the printer hold")
+            if session.native_mode and session.kind == "resonance":
+                path = self.data_folder / "runs" / session.id / "excitation.json"
+                if path.parent.exists():
+                    try:
+                        diagnostic = {"backend": "marlin_m495", "session_id": session.id,
+                                      "axis": session.axis, "outcome": "failed before excitation"}
+                        if path.exists():
+                            with path.open(encoding="utf-8") as stream:
+                                diagnostic = json.load(stream)
+                        diagnostic["cleanup"] = {"settings_verified": not session.changed,
+                                                 "recovery_required": self.journal.exists(), "error": self.error}
+                        self._write_json(path, diagnostic)
+                        self._write_json(path.parent / "protocol_events.json", session.native_events)
+                        if self.error and not (path.parent / "analysis.json").exists():
+                            self._write_json(path.parent / "analysis.json", {
+                                "recommendation_valid": False, "error": self.error})
+                        names = {"csv": "capture.csv", "metadata": "capture.csv.meta.json",
+                                 "sensor_log": "capture.csv.log", "events": "protocol_events.json",
+                                 "excitation": "excitation.json", "analysis": "analysis.json",
+                                 "configuration": "configuration.json", "sensor_check": "sensor_check.csv"}
+                        self.native_diagnostics = {"session_id": session.id,
+                            "files": {key: name for key, name in names.items() if (path.parent / name).is_file()}}
+                    except Exception:
+                        self.logger.exception("Could not record native cleanup outcome")
             with self.lock:
                 self.session = None
             self.publish({"type": "state", **self.status()})
@@ -624,5 +768,5 @@ class CalibrationController:
         if self.thread:
             self.thread.join(timeout=4)
             session = self.session
-            if self.thread.is_alive() and session and session.changed:
+            if self.thread.is_alive() and session and session.changed and not (session.native_mode and session.kind in ("resonance", "recover")):
                 self.printer.commands("M112", tags={TAG, RECOVERY_TAG})

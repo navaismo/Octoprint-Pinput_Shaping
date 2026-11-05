@@ -24,8 +24,20 @@
     <div class="alert alert-error" role="alert" data-bind="visible: error, text: error"></div>
     <div class="alert alert-info" data-bind="visible: summary, text: summary"></div>
     <div class="alert alert-warning" data-bind="visible: recoveryRequired">
-        A calibration was interrupted. Firmware settings need recovery before another test.
+        A calibration was interrupted. Native motion may still be active; stop and settings must be verified before another test.
         <button class="btn" data-bind="click: recover, enable: !busy() &amp;&amp; printerState.isOperational()">Restore saved settings</button>
+    </div>
+    <div class="alert alert-info" data-bind="visible: nativeSelected">
+        Native Marlin M495: <strong data-bind="text: nativeCapability().state"></strong>.
+        <span data-bind="text: nativeCapability().message"></span>
+        Configure and detect support in Settings before calibration. Marlin uses its internal test position;
+        the position grid applies to axis checks and software calibration.
+    </div>
+    <div data-bind="if: diagnostics() &amp;&amp; !result()">
+        <p>Native run diagnostics: <code data-bind="text: diagnostics().session_id"></code></p>
+        <p data-bind="foreach: Object.keys(diagnostics().files)">
+            <a data-bind="text: $data, attr: {href: $root.fileURL($data)}"></a> ·
+        </p>
     </div>
 
     <div class="pinput-actions">
@@ -41,6 +53,8 @@
     <p aria-live="polite" data-bind="visible: busy">
         Stage: <strong data-bind="text: stage"></strong>
         <span data-bind="visible: progress"> — <span data-bind="text: progress"></span>%</span>
+        <span data-bind="text: progressSource"></span>.
+        Sensor: <span data-bind="text: sensorState"></span>
     </p>
 
     <table class="table table-condensed" data-bind="visible: samples().length">
@@ -69,19 +83,35 @@
             Y: <span data-bind="text: calculatedY"></span> mm</p>
     </div>
     <div class="pinput-actions">
-        <button class="btn btn-primary" data-bind="click: function () { runResonance('X'); }, enable: canMove">Calibrate X</button>
-        <button class="btn btn-primary" data-bind="click: function () { runResonance('Y'); }, enable: canMove">Calibrate Y</button>
+        <button class="btn btn-primary" data-bind="click: function () { runResonance('X'); }, enable: canCalibrate">Calibrate X</button>
+        <button class="btn btn-primary" data-bind="click: function () { runResonance('Y'); }, enable: canCalibrate">Calibrate Y</button>
     </div>
 
     <div data-bind="visible: result">
         <hr>
         <h4>Measured result</h4>
         <p data-bind="with: result">
+            Backend: <span data-bind="text: backend || 'software'"></span>.
             Axis <strong data-bind="text: axis"></strong>:
-            resonance <strong data-bind="text: base_freq.toFixed(1)"></strong> Hz.
+            resonance <strong data-bind="text: base_freq !== null ? base_freq.toFixed(1) : 'No confident candidate'"></strong> Hz.
             Recommended <strong data-bind="text: best_shaper"></strong>
-            at <strong data-bind="text: best_shaper_freq.toFixed(1)"></strong> Hz.
+            at <strong data-bind="text: best_shaper_freq !== null ? best_shaper_freq.toFixed(1) : 'Unavailable'"></strong> Hz.
         </p>
+        <div data-bind="if: result() &amp;&amp; result().backend === 'marlin_m495'">
+            <div data-bind="with: result().quality">
+                <p data-bind="with: $data.alignment">
+                    Excitation interval estimated from the signal:
+                    <span data-bind="text: sensor_start.toFixed(2)"></span>–<span data-bind="text: sensor_end.toFixed(2)"></span> s;
+                    boundary uncertainty ±<span data-bind="text: uncertainty_seconds.toFixed(2)"></span> s.
+                </p>
+                <p>Supported fundamental coverage: <span data-bind="text: (coverage * 100).toFixed(1)"></span>%.</p>
+                <ul data-bind="foreach: $data.resonance_candidates || []">
+                    <li>Candidate resonance: <span data-bind="text: frequency.toFixed(1)"></span> ±
+                        <span data-bind="text: uncertainty_hz.toFixed(1)"></span> Hz;
+                        relative power <span data-bind="text: relative_power.toFixed(1)"></span>.</li>
+                </ul>
+            </div>
+        </div>
         <table class="table table-striped">
             <thead><tr><th>Shaper</th><th>Frequency (Hz)</th><th>Predicted residual</th>
                 <th>Duration (ms)</th><th>Theoretical accel limit (mm/s²)</th><th>Recommended</th></tr></thead>
@@ -104,6 +134,13 @@
         <button class="btn btn-success" data-bind="click: applyResult, enable: canApply, text: applyLabel"></button>
         <p>Settings are applied to the tested axis in RAM. Validate with a print before saving them to EEPROM.</p>
         <p><a data-bind="attr: {href: fileURL('csv')}">Download raw CSV</a></p>
+        <p data-bind="visible: result() &amp;&amp; result().backend === 'marlin_m495'">
+            <a data-bind="attr: {href: fileURL('events')}">Protocol events</a> ·
+            <a data-bind="attr: {href: fileURL('excitation')}">Excitation and cleanup</a> ·
+            <a data-bind="attr: {href: fileURL('analysis')}">Analysis diagnostics</a> ·
+            <a data-bind="attr: {href: fileURL('metadata')}">Sensor metadata</a> ·
+            <a data-bind="attr: {href: fileURL('sensor_log')}">Sensor log</a>
+        </p>
 
         <div id="pinput_signal" class="pinput-chart" data-bind="visible: interactiveAvailable"></div>
         <div id="pinput_psd" class="pinput-chart" data-bind="visible: interactiveAvailable"></div>

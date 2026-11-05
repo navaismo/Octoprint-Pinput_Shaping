@@ -48,11 +48,12 @@ It runs resonance tests, validates acceleration captures, fits firmware-compatib
 ## Features
 
 - 🧪 **Automated Resonance Testing**
-  - Run ADXL345-based tests for X and Y axes.
-  - 3×3 XY grid + Z selector for precise probing.
+  - Run ADXL345 or LIS2DW tests for X and Y axes.
+  - Select software excitation or native Marlin M495 with manually detected PIS:RT v2 host-arming support.
+  - 3×3 XY grid + Z selector for software calibration and axis checks.
 
 - 📊 **Built-in Data Analysis**
-  - Welch-based PSD calculation and signal filtering.
+  - Welch PSD for software tests; frequency-aware fundamental response for native sweeps.
   - Fits eight c13 FTM shapers, including ZV, ZVD, MZV and the EI family.
   - Rejects invalid clocks, weak resonance measurements and distorted sweep timing.
 
@@ -83,7 +84,7 @@ It runs resonance tests, validates acceleration captures, fits firmware-compatib
 | 2HUMP_EI    | 4-Impulse EI           |
 | 3HUMP_EI    | 5-Impulse EI           |
 
-Candidates use the same raw PSD reference and are ranked by predicted residual vibration and smoothing displacement. Acceleration limits are theoretical estimates capped by the test limit, not measured mechanical capabilities.
+Candidates share a validated reference spectrum and are ranked by predicted residual vibration and smoothing displacement. Native mode uses relative fundamental sensitivity within the measured band. Acceleration limits are theoretical estimates capped by the configured ceiling, not measured mechanical capabilities.
 
 ---
 
@@ -336,8 +337,12 @@ Do not assume that a multi-hump recommendation can be applied with M593.
 
 See [the full firmware contract](docs/firmware-contract.md) for the reviewed
 source revision, shaper IDs, numerical validation, timing constraints and
-recovery behavior. The c13 native M495 resonance command is not enabled and
-is not used by this branch.
+recovery behavior. Native calibration additionally requires the custom c13
+M495 PIS:RT v2 host-arming extension; upstream M495 and PIS v1 cannot provide
+this capture barrier. See the
+[native backend implementation report and hardware walkthrough](docs/native-m495.md).
+The coordinated host-arming change is documented in both repositories. Firmware
+compilation does not flash the printer; the LIS2DW wrapper needs no update.
 
 # Plugin Installation
 
@@ -357,6 +362,9 @@ ADXL345 USB and SPI now install as separate executables.
 
 Open Settings → Pinput Shaping and configure:
 
+- **Resonance Excitation Backend**: software remains the default. Native M495
+  requires a separate manual **Detect M495 Support** check for each connection.
+  Save the selection and parameters before calibration; there is no automatic fallback.
 - Sensor type, USB serial device and sensor channels. Combined XYZ spectra
   reduce sensitivity to mounting orientation.
 - **LIS2DW sample rate (Hz)**: select **800** or **1600** in settings. The default
@@ -366,6 +374,13 @@ Open Settings → Pinput Shaping and configure:
   duration. Travel limits always come from the active printer profile.
 - Damping ratio. It is copied into the measurement result and does not change
   when settings are edited later.
+
+Native defaults are F20–T60 Hz, O20 seconds/octave and A40 acceleration/Hz.
+Preparation, capture and cancellation budgets are separately configurable.
+Marlin owns native homing, positioning and excitation; software acceleration,
+position and duration controls do not define this trajectory. The acceleration
+ceiling still caps theoretical shaper smoothing estimates. Parameters require
+validation on the actual machine.
 
 New installations use a 5–132 Hz analysis range; fitting starts at 20 Hz.
 Existing settings are retained. The analyzer checks the effective sample rate
@@ -397,8 +412,24 @@ the separately installed protocol 2 wrapper provides device-side timing.
 motion already accepted by the firmware drains. Commands still waiting in
 OctoPrint are discarded. **Stop printer (M112)** requests shutdown without a
 confirmation dialog. It is not a substitute for a physical stop device.
+In native mode, ordinary cancellation uses M496 and waits for a valid terminal
+event plus its queued acknowledgment fence. Synchronous preparation can delay
+the stop. An unresolved native stop blocks further operations and requires
+explicit recovery; losing serial communication is not proof of physical stop.
 
 ### Running Input Shaping Tests
+
+For **Native Marlin (M495)**, manually detect firmware and M495 support, save
+the native settings and verify the sensor. Select **Calibrate X** or
+**Calibrate Y** with the native homing/positioning area clear. Capture starts
+before M495. START follows preparation; only COMPLETE establishes successful
+motion, and a validated capture is still required. Estimated progress is
+labelled and never substitutes for COMPLETE. Native plots show a relative
+fundamental response, with explicit alignment uncertainty and quality gates.
+Unreliable data cannot produce an applicable recommendation. Follow the
+[full supervised walkthrough](docs/native-m495.md#hardware-walkthrough).
+
+For **Software-generated Sweep (Legacy)**:
 
 Select a grid point and a Z height of at least 10 mm. Secure the sensor to the
 moving component for the tested axis, clear the travel area and select
@@ -425,6 +456,13 @@ Diagnostics are written to `Pinput_Shaping.log` in OctoPrint's configured log
 folder (normally `~/.octoprint/logs/`). Per-run timing and sensor output remain
 under the plugin data folder in `runs/<session>/excitation.json`,
 `capture.csv.log` and `sensor_check.csv.log`.
+For native runs, the plugin log distinguishes queued M495/M496 commands from
+actual transmissions and records PIS:RT responses with their numeric firmware
+ID. Sensor errors include reported device reasons such as CLIPPING. The run
+diagnostic preserves the failure phase and events received during cancellation.
+Capturing preparation is required by the current M495 lifecycle; a device
+clipping rejection during homing invalidates the acquisition even though
+analysis excludes homing samples.
 
 ### Results
 
@@ -446,6 +484,11 @@ repeatability and print quality before saving settings manually.
 If calibration is interrupted and cannot restore its settings, reset or
 reconnect the same printer and use **Restore saved settings**. Further tests
 remain blocked until recovery succeeds.
+For native recovery, first verify that the printer is fully stopped or reset,
+then confirm that state in the recovery prompt. Native recovery sends M496,
+drains the queued command and verifies settings; it does not blindly overwrite
+unrelated firmware values. Failed native runs retain downloadable CSV, sensor,
+protocol and analysis diagnostics.
 
 ## Development and Validation
 
