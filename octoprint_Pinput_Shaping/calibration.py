@@ -58,7 +58,7 @@ class Session:
 
 class CalibrationController(NativeResonanceMixin):
     def __init__(self, printer, profile, settings, data_folder, publish,
-                 logger=None, capture_factory=AccelerometerCapture, analyzer_factory=None):
+                 logger=None, capture_factory=AccelerometerCapture, analyzer_factory=None, persist_detection=None):
         self.printer = printer
         self.profile = profile
         self.settings = settings
@@ -67,6 +67,7 @@ class CalibrationController(NativeResonanceMixin):
         self.logger = logger or logging.getLogger(__name__)
         self.capture_factory = capture_factory
         self.analyzer_factory = analyzer_factory
+        self.persist_detection = persist_detection
         self.lock = threading.RLock()
         self.inbox = queue.Queue(maxsize=8192)
         self.session = None
@@ -154,7 +155,7 @@ class CalibrationController(NativeResonanceMixin):
                 raise RuntimeError("The printer must be connected and idle")
             if self.journal.exists() and kind != "recover":
                 raise RuntimeError("Restore the interrupted calibration before starting another operation")
-            if kind not in ("prepare", "sensor", "recover", "detect", "detect_native") and self.modes["units"] != "G21":
+            if kind == "apply" and self.modes["units"] != "G21":
                 raise RuntimeError("Prepare millimeter coordinate modes before calibration")
             settings, profile = deepcopy(self.settings()), deepcopy(self.profile())
             axis = data.get("axis", "X")
@@ -181,8 +182,6 @@ class CalibrationController(NativeResonanceMixin):
                 else:
                     position = validate_position(profile, axis, {"X": data.get("start_x"),
                         "Y": data.get("start_y"), "Z": data.get("start_z")})
-                if not all(v is not None for v in self.modes.values()):
-                    raise RuntimeError("Prepare coordinate modes before calibration")
             if kind == "apply":
                 if {"command", "frequency", "damping", "tolerance"}.intersection(data):
                     raise ValueError("Select a saved shaper; command and parameter overrides are not accepted")
@@ -443,7 +442,9 @@ class CalibrationController(NativeResonanceMixin):
             printer_port = self.printer.get_current_connection()[1]
             if printer_port and os.path.realpath(port) == os.path.realpath(printer_port):
                 raise ValueError("The accelerometer port must differ from the printer connection")
-        options = {"lis2dw_rate": session.settings.get("lis2dwRate", 800)} if sensor == "lis2dw" else {}
+        options = {"lis2dw_rate": session.settings.get("lis2dwRate", 800),
+                   "lis2dw_range": session.settings.get("lis2dwRange", 2)} if sensor == "lis2dw" else {
+                       "adxl_rate": session.settings.get("adxlRate", 3200)}
         return self.capture_factory(sensor, path, check_cancel=lambda: self._check(session), port=port, **options)
 
     def _analyzer(self, session, path):
@@ -593,8 +594,62 @@ class CalibrationController(NativeResonanceMixin):
                 "backend": backend,
                 "files": {"signal": "signal.png", "psd": "psd.png", "csv": "capture.csv",
                     **({"events": "protocol_events.json", "excitation": "excitation.json", "analysis": "analysis.json",
-                        "metadata": "capture.csv.meta.json", "sensor_log": "capture.csv.log"} if backend == "marlin_m495" else {})},
+                        "sensor_log": "capture.csv.log",
+                        **({"metadata": "capture.csv.meta.json"} if
+                           (self.data_folder / "runs" / session.id / "capture.csv.meta.json").is_file() else {})}
+                       if backend == "marlin_m495" else {})},
                 **(extra or {})}
+
+    def _log_analysis_result(self, session, result):
+        def number(value):
+            return f"{value:.3f}" if isinstance(value, (int, float)) and math.isfinite(value) else "unavailable"
+
+        context = f"Calibration session {session.id}"
+        if session.firmware_id is not None:
+            context += f" (firmware ID {session.firmware_id})"
+        quality = result.get("quality", {})
+        self.logger.info("%s analysis complete: backend=%s, axis=%s, resonance=%s Hz, recommendation_valid=%s, "
+                         "recommended=%s at %s Hz, samples=%s, sample_rate=%s Hz",
+                         context, result["backend"], result["axis"], number(result.get("base_freq")),
+                         result.get("recommendation_valid", True), result.get("best_shaper") or "none",
+                         number(result.get("best_shaper_freq")), quality.get("samples", "unavailable"),
+                         number(quality.get("sampling_rate")))
+        for name, candidate in result["shapers"].items():
+            residual = candidate.get("vibr")
+            self.logger.info("%s fitted %s: frequency=%s Hz, predicted_residual=%s%%, duration=%s ms, "
+                             "suggested_accel=%s mm/s^2, command=%s",
+                             context, name, number(candidate.get("shaper_freq")),
+                             number(residual * 100 if residual is not None else None),
+                             number(candidate.get("shaper_duration_ms")), number(candidate.get("suggested_accel")),
+                             candidate.get("command"))
+        for warning in result.get("warnings", []):
+            self.logger.warning("%s analysis warning: %s", context, warning)
+
+    def _persist_detection(self, session):
+        if self.persist_detection is None:
+            return
+        self._check(session)
+        result = self.native_capability if session.kind == "detect_native" else self.firmware
+        if self.error or result["state"] in ("unknown", "detecting", "error", "timeout"):
+            return
+        try:
+            changes = self.persist_detection(session.kind, deepcopy(result))
+        except Exception as exc:
+            self.error = f"Could not save detection settings: {exc}"
+            raise
+        self.publish({"type": "detection_saved", "settings": changes,
+                      "message": "Detection complete; plugin settings saved."})
+
+    def _prepare_motion_modes(self, session):
+        if self.modes["units"] == "G21" and all(value is not None for value in self.modes.values()):
+            return
+        self._stage(session, "preparing coordinate modes")
+        self._exchange(session, ["G21", "G90", "M82", "G1 F1500"])
+        if self.modes["units"] != "G21" or not all(value is not None for value in self.modes.values()):
+            raise RuntimeError("Coordinate mode preparation was not confirmed")
+        # This explicit preparation establishes the known baseline used by the
+        # test and recovery when the previous coordinate modes were unknown.
+        session.modes = deepcopy(self.modes)
 
     @staticmethod
     def _application_candidate(result, name):
@@ -670,14 +725,17 @@ class CalibrationController(NativeResonanceMixin):
                               "summary": f"Captured {count} sensor samples"})
             elif session.kind == "detect_native":
                 self._detect_native(session)
+                self._persist_detection(session)
             elif session.kind == "recover" and self.native_unresolved:
                 with self.journal.open(encoding="utf-8") as stream:
                     self._recover_native(session, json.load(stream))
-                self.publish({"type": "completed", "message": "Native stop and printer settings verified. Prepare coordinate modes again."})
+                self.publish({"type": "completed", "message": "Native stop and printer settings verified. Coordinate modes will be prepared with the next calibration."})
             else:
+                if session.kind in ("axis", "resonance"):
+                    self._prepare_motion_modes(session)
                 session.snapshot = self._snapshot(session)
                 if session.kind == "detect":
-                    pass
+                    self._persist_detection(session)
                 elif session.kind == "recover":
                     self._recover(session)
                     self.publish({"type": "completed", "message": "Saved firmware settings restored and verified."})
@@ -696,6 +754,7 @@ class CalibrationController(NativeResonanceMixin):
                         self._check(session)
                         self._write_json(folder / "result.json", result)
                         self.result = result
+                        self._log_analysis_result(session, result)
                         self.publish({"type": "results_ready", "result": result})
         except Exception as exc:
             if session.kind == "detect":

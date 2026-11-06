@@ -55,12 +55,20 @@ The nominal sweep duration is `D = O * log2(T/F)`. For the defaults it is
 capture; processing retains the existing 256 MiB / 2,000,000-sample limits.
 Longer settings require verifying the complete sensor/USB setup under load.
 
-`lis2dwRate` remains 800 Hz by default, with 1600 Hz an explicit choice. Both
-capture uses the frozen session setting. Other drivers keep
-their existing 3200 Hz rate. No wrapper duration is imposed: acquisition is
+`lis2dwRate` remains 800 Hz by default, with 1600 Hz an explicit choice. Each
+capture uses the frozen session setting. ADXL USB and SPI use `adxlRate`,
+selectable at 800, 1600 or 3200 Hz with the previous 3200 Hz default. No wrapper duration is imposed: acquisition is
 stopped through the existing Q/EOF interface, subject to the capture deadline.
-An existing protocol-2 LIS2DW wrapper is compatible; this feature does not
-install or update one on the Raspberry Pi.
+`lis2dwRange` selects 2, 4, 8 or 16 g in the same accelerometer settings group.
+New configurations use 16 g. Settings migration retains the former 2 g range
+for existing saved configurations without this field; explicit selections
+are preserved. Direct legacy session settings without the field use 2 g.
+The wrapper is checked through `-h` without opening the sensor. A range-aware
+wrapper receives `-r <range>` and must report the matching verified READY
+range/scale before capture readiness; an older wrapper is accepted only at 2 g
+without `-r`. Nondefault ranges fail with upgrade instructions before M495
+when the wrapper lacks range support. No automatic acquisition retries occur.
+This feature does not install or update the wrapper or sensor firmware.
 
 The new Simple API command is `detect_m495`, mapped to `detect_native`. It
 requires authentication and printer CONTROL permission. Status exposes
@@ -73,7 +81,7 @@ operator has verified the same printer is stopped or reset.
 
 ## Exact protocol and detection
 
-**Detect firmware** remains manual and separate from **Detect M495 Support**.
+**Detect firmware** remains manual and separate from **Detect Native Marlin M495**.
 Startup, connection, status refresh and backend selection do not probe. The
 native detector sends read-only `M495 Q`, then `M495 Q2` after a v1 response,
 each bracketed by separate unique `M118` query fences. Responses before the
@@ -84,7 +92,20 @@ software excitation and explicit recovery of old native journals remain
 available. Detection reports unknown, detecting, supported, legacy, unsupported,
 incompatible version, timeout or error. Each query is bounded to ten seconds
 and the communication hold is released on interruption. Session events cannot
-establish capability. Reconnect, changed port/baud and changed firmware identification invalidate
+establish capability.
+
+The first query is literally `M495 Q`, not `M495 Q1`. `Q1` is rejected by the
+reviewed firmware. See the [UML sequence in the README](../README.md#m495-communication)
+and the [portable upstream patch](patches/README.md) when using another fork.
+
+Both detection buttons are available in the tab and Settings. They first save
+only this plugin's displayed editable settings, and do not probe if that save
+fails. A completed manual detection persists `detectedFirmware` or
+`detectedNative`; confirmed v2 also selects and saves `excitationBackend` as
+`marlin_m495`, notifying all connected frontends. Persisted reports are
+informational and cannot authorize calibration after restarting/reconnecting.
+
+Reconnect, changed port/baud and changed firmware identification invalidate
 the capability. There are no automatic retries.
 
 Instrumented example:
@@ -216,14 +237,21 @@ session's terminal event is accepted as stop proof for cleanup only. If a reset
 erased the old ID/terminal, recovery additionally requires the operator's
 explicit stopped/reset confirmation. A fenced M496 alone is not treated as
 an observed ABORTED. Changed settings must be reviewed and reconciled; recovery
-does not silently rewrite them. Prepare coordinate modes again afterward.
+does not silently rewrite them. Coordinate modes are prepared automatically
+with the next axis check or calibration when necessary.
 
 ## Signal alignment and native response
 
 Host monotonic capture launch/readiness, stop request/exit and PIS:RT receipt
 times are recorded. LIS2DW protocol-2 metadata must indicate valid acquisition,
 the selected requested rate, matching CSV sample count, effective rate consistent
-with timestamps, g units, 16384 counts/g and `rp2040_fifo_poll` timing. Excessive
+with timestamps, g units and `rp2040_fifo_poll` timing. Range-aware metadata
+must match the requested range in both `requested_range_g` and `range_g`, with
+16384, 8192, 4096 or 2048 `counts_per_g` for 2, 4, 8 or 16 g respectively.
+Only the legacy fixed-2-g path permits omitted range fields, with an explicit
+16384 counts/g scale. Missing or contradictory negotiated scale metadata is
+rejected. CSV values are already in g and are never converted a second time.
+Actual range/scale appear in analysis quality metadata and session logs. Excessive
 observation windows, bad CSV clocks, gaps, insufficient sampling, clipping and
 stale data are rejected. The shared rate gate remains at least 2.5 times the
 analysis end frequency. Device capture duration is also checked against the
@@ -297,6 +325,12 @@ response with predicted shaper curves. Software results retain PSD labels.
 Incomplete captures never enable application; a diagnostic-only native result
 is also rejected by the application API even if a caller supplies a shaper.
 
+Analysis completion is also logged with the plugin UUID, native firmware ID,
+resonance, recommendation validity, recommended shaper/frequency and sample
+quality. Every fitted candidate logs frequency, predicted residual, duration,
+acceleration estimate and its axis command. Warnings and diagnostic-only
+outcomes are logged explicitly, without applying settings automatically.
+
 ### Command visibility and preparation clipping
 
 `Pinput_Shaping.log` records the complete M495/M496 command as `native QUEUED`
@@ -319,19 +353,22 @@ The LIS2DW firmware invalidates acquisition on CLIPPING. With v2, acquisition
 is absent during native homing/positioning and begins only inside the prepared
 barrier. Cropping cannot salvage invalid captures. Launching acquisition on
 START is not supported because serial/process startup could lose initial sweep
-samples. Sensor range/scaling and native motion equations are unchanged.
+samples. Select a wider verified sensor range when excitation clips at ±2 g;
+the plugin does not alter native motion equations to compensate for clipping.
 
 ## Hardware walkthrough
 
 1. Open **Settings → Pinput Shaping** with the correct printer connected and idle.
    Confirm its profile, sensor mounting and distinct sensor port. Use an already
-   verified protocol-2 LIS2DW wrapper; start with **800 Hz**.
-2. Click **Detect firmware**, then **Detect M495 Support**. Both are manual,
+   verified protocol-2 LIS2DW wrapper; start with **800 Hz** and choose the
+   accelerometer range. Verify range-aware wrapper/firmware support for ±16 g.
+2. Click **Detect firmware**, then **Detect Native Marlin M495**. Both are manual,
    non-moving operations. Verify supported PIS:RT v2 for this connection; v1 disables native calibration.
 3. Select **Native Marlin (M495)**. For the previously validated machine,
    configure X, F20, T60, O20, A40 and conservative preparation/capture/cancel
    budgets. These settings are not universal mechanical limits. Save settings.
-4. Use **Prepare coordinate modes** and **Sensor values**. Secure the sensor
+4. Use **Sensor values**. Axis checks and Calibrate X/Y prepare coordinate
+   modes automatically inside the worker before snapshots or motion. Secure the sensor
    on the component moving with the tested axis and clear all native homing/
    positioning travel; the software position grid does not set M495's position.
 5. Select **Calibrate X** and confirm. Observe no capture during preparation, followed by
@@ -405,3 +442,71 @@ Klipper's [resonance tester](https://github.com/Klipper3d/klipper/blob/master/kl
 and [shaper calibration](https://github.com/Klipper3d/klipper/blob/master/klippy/extras/shaper_calibrate.py)
 were background references; the native adapter follows this Marlin waveform
 and retains this plugin's c13 coefficient contract.
+
+## Detection, coordinate and logging follow-up (2026-11-05)
+
+The follow-up passed 323 pytest checks including the live c13 coefficient
+contract, plus frontend checks with both offline interfaces and OctoPrint's
+installed Knockout. Regression checks cover automatic X/Y preparation,
+preparation failure before movement, detection persistence and save failures,
+native backend selection, delayed settings saves and diagnostic-only logs.
+Only plugin files changed; no firmware rebuild, flash or physical motion was
+performed for this follow-up.
+
+## Calibration workspace
+
+The main tab follows the setup and results references in `ui_screens/`.
+Cards inherit the active OctoPrint theme, with firmware, native capability,
+sensor and backend summaries. Section headings and status labels use plain
+text. The connection panel and editable Test Configuration block are
+omitted; test parameters remain in plugin Settings. The existing rounded
+settings layout, accelerometer choices, range/rate selectors and detection
+with automatic saving are retained.
+
+Setup groups sensor values, manual detection, bounded axis checks,
+cancellation and emergency stop. The numbered XY grid and vertical Z slider
+remain available for software excitation. Native M495 disables those controls
+and explicitly states that firmware owns XY/Z positioning. Native requests
+still omit host-selected coordinates. Worker stages drive the progress display;
+error cleanup cannot mark unperformed excitation phases complete.
+
+Completed analysis opens a separate results view. Operators can return to
+setup and reopen the same result without changing its shaper selection.
+Results contain the measured resonance, recommendation, actual sample rate
+and reported sensor range, quality details, candidate resonances, comparison
+table, saved-command preview and application controls. Selecting a fitted
+shaper in the table or selector retains the existing server-side validation.
+Diagnostic-only results remain visible with application disabled.
+
+Protocol history is loaded from the authenticated `protocol_events.json`
+artifact. Displayed times are relative host receipt times from that file;
+START means native excitation started, and COMPLETE means native movement
+finished, not that analysis finished. No firmware or sensor-clock timestamps
+are synthesized. Downloads from stale sessions are ignored. Missing history
+leaves the original diagnostic download available.
+
+Analysis tabs provide Overview, Time Signal, Frequency Response and
+Diagnostics, with keyboard navigation, optional fullscreen and raw CSV export.
+Interactive Plotly charts follow the host background and text colors,
+including theme changes after loading. PNG fallback and individual PNG
+downloads remain available without Plotly. Request and worker
+errors open a dismissible popup. Repeated status polls do not reopen the same
+dismissed error; its details remain accessible below Test Progress until the
+error clears, or next to the application controls for an application error.
+Stage names use blue/green accents; diagnostic session IDs and command
+previews use a readable blue accent instead of error-red styling.
+
+Theme checks cover native light/dark and custom host colors, stylesheet
+changes and redraw-loop prevention. Firefox previews verify these themes and
+failed-session diagnostics. A Chrome check switches the host theme after chart
+rendering and verifies chart text and the selected shaper remain correct.
+
+Frontend checks cover view navigation, saved settings and shaper gating,
+error notification lifecycle, progress phases, chart tabs, protocol loading
+and stale responses, using both offline interfaces and real OctoPrint Knockout.
+The complete offline suite passed 416 pytest checks, including the live c13
+shaping contract. Firefox previews exercise the actual Knockout templates
+at desktop, narrow and mobile widths, including software positioning,
+diagnostic-only results and operation without Plotly. No physical printer,
+firmware, capture synchronization or analysis equations are changed by this
+presentation update.

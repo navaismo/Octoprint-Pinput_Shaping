@@ -110,6 +110,46 @@ def test_sensor_precheck_and_capture_use_the_frozen_lis2dw_rate(controller, sett
     assert saved["settings"]["lis2dwRate"] == rate
 
 
+@pytest.mark.parametrize("full_scale", [2, 4, 8, 16])
+def test_software_precheck_and_capture_use_frozen_lis2dw_range(controller, settings, full_scale):
+    settings.update(sensorType="lis2dw", lis2dwRange=full_scale)
+    ranges = []
+    class SelectedCapture(Capture):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            ranges.append(self.range_g)
+            settings["lis2dwRange"] = 4 if full_scale == 16 else 16
+    controller.capture_factory = SelectedCapture
+    identifier = run(controller)
+    assert controller.error is None
+    assert ranges == [full_scale, full_scale]
+    saved = json.loads((controller.data_folder / "runs" / identifier / "configuration.json").read_text())
+    assert saved["settings"]["lis2dwRange"] == full_scale
+    assert controller.result["backend"] == "software"
+    assert not any(cmd.startswith(("M495", "M496")) for cmd in controller.printer.sent_commands)
+
+
+@pytest.mark.parametrize("sensor", ["adxlspi", "adxlusb"])
+@pytest.mark.parametrize("rate", [800, 1600, 3200])
+def test_software_adxl_precheck_and_capture_keep_selected_rate(controller, settings, sensor, rate):
+    settings.update(sensorType=sensor, adxlRate=rate, lis2dwRate=800, lis2dwRange=16)
+    rates = []
+    class SelectedCapture(Capture):
+        def __init__(self, *args, **kwargs):
+            super().__init__(*args, **kwargs)
+            assert "lis2dw_rate" not in kwargs and "lis2dw_range" not in kwargs
+            rates.append(self.rate)
+            settings["adxlRate"] = 800 if rate == 3200 else 3200
+    controller.capture_factory = SelectedCapture
+    identifier = run(controller)
+    assert controller.error is None
+    assert rates == [rate, rate]
+    saved = json.loads((controller.data_folder / "runs" / identifier / "configuration.json").read_text())
+    assert saved["settings"]["adxlRate"] == rate
+    assert controller.result["backend"] == "software"
+    assert not any(cmd.startswith(("M495", "M496")) for cmd in controller.printer.sent_commands)
+
+
 def test_sensor_exit_during_excitation_restores_settings_and_never_publishes_a_result(controller, snapshot):
     class ExitingCapture(Capture):
         def ensure_alive(self):
@@ -300,11 +340,50 @@ def test_mutating_foreign_command_is_identified_in_cancellation_and_log(controll
     controller.session = None
 
 
-def test_unknown_modes_and_invalid_positions_are_rejected_before_thread_start(controller):
-    controller.modes["xyz"] = None
-    with pytest.raises(RuntimeError, match="coordinate"):
-        controller.submit("axis", dict(axis="X", start_x=110, start_y=110, start_z=10))
+def test_invalid_positions_are_rejected_before_coordinate_preparation(controller):
+    controller.modes = dict(units=None, xyz=None, extruder=None, feed=None)
+    with pytest.raises(ValueError):
+        controller.submit("axis", dict(axis="X", start_x=10000, start_y=110, start_z=10))
     assert controller.thread is None
+    assert controller.printer.sent_commands == []
+
+
+@pytest.mark.parametrize("kind", ["axis", "resonance"])
+@pytest.mark.parametrize("units", [None, "G20"])
+def test_axis_operations_prepare_unknown_or_imperial_modes_before_snapshot_and_motion(controller, kind, units):
+    controller.modes = dict(units=units, xyz=None, extruder=None, feed=None)
+    run(controller, kind)
+    assert controller.error is None
+    commands = controller.printer.sent_commands
+    assert commands[:4] == ["G21", "G90", "M82", "G1 F1500"]
+    assert commands.index("G1 F1500") < commands.index("M503") < commands.index("G28")
+    assert all(value is not None for value in controller.modes.values())
+    assert controller.modes["units"] == "G21"
+    assert not controller.journal.exists()
+
+
+def test_failed_automatic_mode_preparation_cannot_start_motion(controller):
+    controller.modes = dict(units=None, xyz=None, extruder=None, feed=None)
+    original = controller.printer.commands
+    def fail(commands, **kwargs):
+        if "G21" in commands:
+            raise RuntimeError("Coordinate preparation failed")
+        original(commands, **kwargs)
+    controller.printer.commands = fail
+    run(controller)
+    assert "Coordinate preparation failed" in controller.error
+    assert "G28" not in controller.printer.sent_commands
+    assert controller.result is None
+
+
+def test_software_analysis_logs_summary_all_candidates_and_warnings(controller, caplog):
+    with caplog.at_level(logging.INFO):
+        identifier = run(controller)
+    assert f"Calibration session {identifier}" in caplog.text
+    assert "analysis complete: backend=software, axis=X, resonance=50.000 Hz" in caplog.text
+    for name in controller.result["shapers"]:
+        assert f"fitted {name}: frequency=" in caplog.text
+    assert controller.result["command"] in caplog.text
 
 
 def test_settings_are_frozen_for_the_session(controller, settings):
@@ -699,3 +778,24 @@ def test_failed_manual_application_rolls_back_original_settings(controller, snap
     assert snapshot.matches(controller.printer.snapshot)
     assert not controller.journal.exists()
     assert not any(e["type"] == "applied" for e in controller.events)
+
+
+def test_manual_firmware_detection_persists_and_notifies_without_restoring_trust_on_reconnect(controller):
+    saved = []
+    controller.persist_detection = lambda kind, result: saved.append((kind, result)) or {"detectedFirmware": result}
+    run(controller, "detect")
+    assert saved[0][0] == "detect" and saved[0][1]["state"] == "ready"
+    assert any(event["type"] == "detection_saved" for event in controller.events)
+    controller.event("Connected")
+    assert controller.status()["firmware"]["state"] == "unknown"
+    assert len(saved) == 1
+
+
+def test_failed_detection_settings_save_releases_communication_and_reports_error(controller):
+    def fail(kind, report):
+        raise RuntimeError("Could not save detection settings")
+    controller.persist_detection = fail
+    run(controller, "detect")
+    assert "Could not save detection settings" in controller.error
+    assert not controller.printer.hold
+    assert not any(event["type"] == "detection_saved" for event in controller.events)

@@ -130,11 +130,13 @@ class Printer:
 class Capture:
     frequency = 50
 
-    def __init__(self, sensor_type, path, check_cancel, port="", lis2dw_rate=800):
+    def __init__(self, sensor_type, path, check_cancel, port="", lis2dw_rate=800, lis2dw_range=2,
+                 adxl_rate=3200):
         self.path = Path(path)
         self.check_cancel = check_cancel
         self.stopped = False
-        self.rate = lis2dw_rate if sensor_type == "lis2dw" else 3200
+        self.rate = lis2dw_rate if sensor_type == "lis2dw" else adxl_rate
+        self.range_g = lis2dw_range if sensor_type == "lis2dw" else None
 
     def start(self):
         self.check_cancel()

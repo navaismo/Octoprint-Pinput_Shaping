@@ -147,6 +147,7 @@ def test_protocol_metadata_must_be_present_valid_and_match_csv(tmp_path):
     path = tmp_path / "capture.csv"
     with pytest.raises(MeasurementError):
         capture_metadata(path, "lis2dw", 800)
+
     sidecar = tmp_path / "capture.csv.meta.json"
     metadata = {"protocol": 2, "valid": True, "requested_rate": 800, "effective_rate": 800,
                 "samples": 1000, "max_window_us": 20, "units": "g", "counts_per_g": 16384, "clock": "rp2040_fifo_poll"}
@@ -158,3 +159,66 @@ def test_protocol_metadata_must_be_present_valid_and_match_csv(tmp_path):
     sidecar.write_text(json.dumps(metadata))
     with pytest.raises(MeasurementError):
         capture_metadata(path, "lis2dw", 800)
+
+
+def range_metadata(full_scale, samples=1000):
+    return {"protocol": 2, "valid": True, "requested_rate": 800, "effective_rate": 800,
+            "samples": samples, "max_window_us": 20, "units": "g", "counts_per_g": 32768 // full_scale,
+            "clock": "rp2040_fifo_poll", "requested_range_g": full_scale, "range_g": full_scale}
+
+
+@pytest.mark.parametrize("full_scale", [2, 4, 8, 16])
+def test_negotiated_ranges_pass_native_analysis_without_converting_g_again(tmp_path, full_scale):
+    path = tmp_path / "capture.csv"
+    count = sweep(path)
+    frame = pd.read_csv(path)
+    path.with_suffix(".csv.meta.json").write_text(json.dumps(range_metadata(full_scale, count)))
+    metadata = capture_metadata(path, "lis2dw", 800, count, requested_range=full_scale, range_required=True)
+    assert metadata["range_g"] == full_scale
+    assert metadata["counts_per_g"] == 32768 // full_scale
+    result = analyzer(path, sensor_metadata=metadata, lis2dw_range=full_scale)
+    result.analyze()
+    assert result.recommendation_valid
+    assert abs(result.base_freq - 40) < 1.5
+    assert result.quality["accelerometer"]["range_g"] == full_scale
+    assert result.quality["accelerometer"]["units"] == "g"
+    alignment = result.quality["alignment"]
+    times = frame.time - frame.time.iloc[0]
+    selected = ((times >= alignment["sensor_start"] + alignment["uncertainty_seconds"])
+                & (times <= alignment["sensor_end"] - alignment["uncertainty_seconds"]))
+    np.testing.assert_array_equal(result.raw_axes, frame.loc[selected, ["x", "y", "z"]].to_numpy())
+
+
+@pytest.mark.parametrize("change", [
+    {"counts_per_g": 16384}, {"counts_per_g": None}, {"counts_per_g": "2048"},
+    {"counts_per_g": True}, {"range_g": 2}, {"requested_range_g": 8}, {"range_g": "16"},
+    {"range_g": None}, {"range_g": True}, {"units": "raw"},
+])
+def test_contradictory_range_or_scale_metadata_is_rejected(tmp_path, change):
+    path = tmp_path / "capture.csv"
+    metadata = {**range_metadata(16), **change}
+    path.with_suffix(".csv.meta.json").write_text(json.dumps(metadata))
+    with pytest.raises(MeasurementError, match="metadata|range_g"):
+        capture_metadata(path, "lis2dw", 800, requested_range=16, range_required=True)
+
+
+@pytest.mark.parametrize("missing", ["range_g", "requested_range_g", "counts_per_g"])
+@pytest.mark.parametrize("full_scale", [2, 4, 8, 16])
+def test_required_negotiation_never_infers_missing_scale_metadata(tmp_path, full_scale, missing):
+    path = tmp_path / "capture.csv"
+    metadata = range_metadata(full_scale)
+    del metadata[missing]
+    path.with_suffix(".csv.meta.json").write_text(json.dumps(metadata))
+    with pytest.raises(MeasurementError):
+        capture_metadata(path, "lis2dw", 800, requested_range=full_scale, range_required=True)
+
+
+def test_legacy_metadata_is_safe_only_for_unnegotiated_two_g(tmp_path):
+    path = tmp_path / "capture.csv"
+    metadata = range_metadata(2)
+    del metadata["range_g"], metadata["requested_range_g"]
+    path.with_suffix(".csv.meta.json").write_text(json.dumps(metadata))
+    assert capture_metadata(path, "lis2dw", 800)["range_negotiated"] is False
+    for full_scale, required in [(2, True), (4, False), (8, False), (16, False)]:
+        with pytest.raises(MeasurementError, match="negotiation metadata is missing"):
+            capture_metadata(path, "lis2dw", 800, requested_range=full_scale, range_required=required)

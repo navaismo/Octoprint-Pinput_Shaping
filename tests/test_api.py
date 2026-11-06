@@ -92,6 +92,40 @@ def test_api_accepts_a_shaper_name_and_rejects_parameter_overrides(api):
         assert received == [("apply", {"session_id": "a" * 32, "shaper": "MZV"})]
 
 
+@pytest.mark.parametrize("selection", [{}, {"shaper": "MZV"}])
+def test_apply_accepts_octoprint_command_envelope_without_forwarding_it(api, selection):
+    app, plugin = api
+    received = []
+    plugin.controller.submit = lambda kind, data: received.append((kind, data)) or "b" * 32
+    payload = {"command": "apply_result", "session_id": "a" * 32, **selection}
+    with app.test_request_context(json=payload):
+        # Use OctoPrint's real parser when available; its return data includes
+        # the routing command, just as the browser's simpleApiCommand sends it.
+        import octoprint.server.util.flask as api_util
+        if hasattr(api_util, "get_json_command_from_request"):
+            command, data, error = api_util.get_json_command_from_request(flask.request, plugin.get_api_commands())
+            assert error is None
+        else:
+            command, data = payload["command"], flask.request.get_json()
+        response, code = plugin.on_api_command(command, data)
+    assert code == 202
+    assert response.get_json()["success"]
+    assert received == [("apply", {"session_id": "a" * 32, **selection})]
+    assert payload["command"] == "apply_result"
+
+
+@pytest.mark.parametrize("override", [{"frequency": 99}, {"damping": 0.1}, {"tolerance": 0.1},
+                                     {"gcode": "M493 X C8 A99 I0.1"}, {"command": "M493 X C8 A99 I0.1"}])
+def test_apply_command_envelope_cannot_bypass_saved_result_validation(api, override):
+    app, plugin = api
+    plugin.controller.submit = lambda *args: pytest.fail("Invalid application reached the controller")
+    with app.test_request_context():
+        response, code = plugin.on_api_command("apply_result", {
+            "command": "apply_result", "session_id": "a" * 32, "shaper": "MZV", **override})
+    assert code == 400
+    assert "overrides" in response.get_json()["error"]
+
+
 def test_native_detection_uses_a_separate_manual_api_operation(api):
     app, plugin = api
     received = []
@@ -109,6 +143,7 @@ def test_native_defaults_preserve_software_backend_and_lis800(api):
     defaults = plugin.get_settings_defaults()
     assert defaults["excitationBackend"] == "software"
     assert defaults["lis2dwRate"] == 800
+    assert defaults["lis2dwRange"] == 16
     assert [defaults[key] for key in ("nativeStart", "nativeEnd", "nativeOctave", "nativeAccel")] == [20, 60, 20, 40]
 
 
@@ -123,3 +158,106 @@ def test_native_diagnostics_downloads_use_authenticated_whitelisted_route(api, t
     assert response.status_code == 200
     assert "attachment" in response.headers["Content-Disposition"]
     response.close()
+
+
+@pytest.mark.parametrize("kind,report,backend", [
+    ("detect", {"state": "ready", "protocol": "ftm"}, "software"),
+    ("detect_native", {"state": "supported", "protocol": 2}, "marlin_m495"),
+    ("detect_native", {"state": "legacy", "protocol": 1}, "software"),
+    ("detect_native", {"state": "unsupported", "protocol": None}, "software"),
+])
+def test_detection_persists_reports_and_selects_only_confirmed_native_v2(api, kind, report, backend):
+    import logging
+    _, plugin = api
+    values, saved = {"excitationBackend": "software", "lis2dwRate": 800}, []
+    plugin._settings = types.SimpleNamespace(
+        set=lambda path, value: values.update({path[0]: value}),
+        get=lambda path: values.get(path[0]), save=lambda: saved.append(dict(values)))
+    plugin._logger = logging.getLogger(__name__)
+    changes = plugin._save_detection(kind, report)
+    key = "detectedFirmware" if kind == "detect" else "detectedNative"
+    assert saved == [values]
+    assert saved[0][key] == report
+    assert saved[0]["excitationBackend"] == backend
+    assert saved[0]["lis2dwRate"] == 800
+    assert changes[key] == report
+
+
+@pytest.fixture
+def range_settings(api, tmp_path):
+    import octoprint.plugin
+    if not hasattr(octoprint.plugin, "PluginSettings"):
+        pytest.skip("Requires the real OctoPrint settings manager")
+    from octoprint.settings import Settings
+    _, plugin = api
+    plugin._printer_profile_manager.get_current_or_default = lambda: {"volume": dict(width=220, depth=220, height=250)}
+    manager = Settings(configfile=str(tmp_path / "config.yaml"), basedir=str(tmp_path))
+    plugin._settings = octoprint.plugin.PluginSettings(manager, "Pinput_Shaping", defaults=plugin.get_settings_defaults())
+    return plugin, manager
+
+
+@pytest.mark.parametrize("full_scale", [2, 4, 8, 16, "2", "4", "8", "16"])
+def test_accelerometer_range_settings_validate_and_persist(range_settings, full_scale):
+    plugin, manager = range_settings
+    plugin.on_settings_save({"lis2dwRange": full_scale, "lis2dwRate": 800})
+    plugin._settings.save()
+    manager.load()
+    assert plugin._settings.get(["lis2dwRange"]) == int(full_scale)
+    assert plugin._settings.get(["lis2dwRate"]) == 800
+    assert plugin._settings.get(["_config_version"]) == 1
+    plugin.on_settings_migrate(1, 1)
+    assert plugin._settings.get(["lis2dwRange"]) == int(full_scale)
+
+
+@pytest.mark.parametrize("value", [True, None, 1, 3, 32, 16.5, "bad", float("nan")])
+def test_invalid_range_setting_does_not_overwrite_saved_values(range_settings, value):
+    plugin, _ = range_settings
+    plugin.on_settings_save({"lis2dwRange": 8, "lis2dwRate": 800})
+    with pytest.raises(ValueError, match="range"):
+        plugin.on_settings_save({"lis2dwRange": value, "lis2dwRate": 1600})
+    assert plugin._settings.get(["lis2dwRange"]) == 8
+    assert plugin._settings.get(["lis2dwRate"]) == 800
+
+
+@pytest.mark.parametrize("saved,expected", [
+    ({}, 16), ({"sensorType": "lis2dw", "lis2dwRate": 800}, 2),
+    ({"sensorType": "adxlusb"}, 2), ({"lis2dwRange": 4}, 4),
+    ({"lis2dwRange": 8}, 8), ({"lis2dwRange": 16}, 16),
+])
+def test_range_migration_preserves_existing_configurations(range_settings, saved, expected):
+    plugin, manager = range_settings
+    plugin._settings.set([], saved)
+    plugin.on_settings_migrate(1, None)
+    plugin._settings.save()
+    manager.load()
+    assert plugin._settings.get(["lis2dwRange"]) == expected
+    for key, value in saved.items():
+        assert plugin._settings.get([key]) == value
+
+
+@pytest.mark.parametrize("sensor", ["adxlspi", "adxlusb", "lis2dw"])
+@pytest.mark.parametrize("axis", ["sum", "x", "y", "z"])
+def test_sensor_configuration_persists_across_driver_changes(range_settings, sensor, axis):
+    plugin, manager = range_settings
+    for rate in (800, 1600, 3200):
+        plugin.on_settings_save({"sensorType": sensor, "sensorAxis": axis, "adxlRate": str(rate),
+                                 "lis2dwRate": 800, "lis2dwRange": 16,
+                                 "sensorPort": "/dev/serial/by-id/usb-accelerometer"})
+        plugin._settings.save()
+        manager.load()
+        for key, value in {"sensorType": sensor, "sensorAxis": axis, "adxlRate": rate,
+                           "lis2dwRate": 800, "lis2dwRange": 16,
+                           "sensorPort": "/dev/serial/by-id/usb-accelerometer"}.items():
+            assert plugin._settings.get([key]) == value
+
+
+@pytest.mark.parametrize("change", [{"sensorType": "unknown"}, {"sensorAxis": "XY"}, {"adxlRate": 400},
+                                   {"adxlRate": True}, {"lis2dwRate": 3200}, {"sensorPort": None},
+                                   {"sensorPort": "/tmp/sensor"}])
+def test_invalid_sensor_settings_do_not_partially_save(range_settings, change):
+    plugin, _ = range_settings
+    assert plugin._settings.get(["adxlRate"]) == 3200
+    with pytest.raises(ValueError):
+        plugin.on_settings_save({"lis2dwRange": 4, **change})
+    assert plugin._settings.get(["lis2dwRange"]) == 16
+    assert plugin._settings.get(["adxlRate"]) == 3200

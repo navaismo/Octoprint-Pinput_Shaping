@@ -239,7 +239,9 @@ class NativeResonanceMixin:
         from .inputshaping_analyzer import InputShapingAnalyzer
         parameters = NativeParameters.from_settings(session.settings)
         sensor = session.settings["sensorType"]
-        rate = int(session.settings.get("lis2dwRate", 800)) if sensor == "lis2dw" else 3200
+        from .capture import sampling_rate
+        rate = sampling_rate(sensor, session.settings)
+        requested_range = session.settings.get("lis2dwRange", 2) if sensor == "lis2dw" else None
         reserve = max(32 * 1024 * 1024, int(parameters.max_capture * rate * 128 * 2))
         if shutil.disk_usage(folder).free < reserve:
             raise RuntimeError("Insufficient disk space for the bounded native capture")
@@ -261,6 +263,8 @@ class NativeResonanceMixin:
             "sensor": sensor, "port": session.settings.get("sensorPort", ""), "requested_rate": rate,
             "clock_assumption": "host events and sensor samples are not synchronized",
             "protocol": 2, "capture_trigger": "matching ARMED_WAIT received", "outcome": "incomplete"}
+        if sensor == "lis2dw":
+            diagnostic["requested_range_g"] = requested_range
         analyzer = None
         capture_attempted = False
         capturing = False
@@ -363,14 +367,21 @@ class NativeResonanceMixin:
             self._stage(session, "validating capture")
             self.publish({"type": "progress", "session_id": session.id, "progress": 0.95,
                           "progress_source": "COMPLETE received; validating capture", "sensor_state": "stopped, pending validation"})
-            metadata = capture_metadata(folder / "capture.csv", sensor, rate)
+            metadata = capture_metadata(folder / "capture.csv", sensor, rate,
+                requested_range=requested_range, range_required=getattr(capture, "range_negotiated", False))
             diagnostic["metadata"] = metadata
+            if sensor == "lis2dw":
+                self.logger.info("Calibration session %s (firmware ID %s) LIS2DW capture validated: "
+                                 "requested range=+/-%s g, actual range=+/-%s g, counts_per_g=%s, units=%s, effective rate=%s Hz",
+                                 session.id, session.firmware_id, requested_range, metadata["range_g"],
+                                 metadata["counts_per_g"], metadata["units"], metadata["effective_rate"])
             self._native_restore(session)
             self._stage(session, "analyzing native resonance")
             ready = getattr(capture, "host_times", {}).get("ready")
             capture_interval = diagnostic["host_capture_stop_requested"] - ready if ready is not None else None
             analyzer = NativeSweepAnalyzer(folder, folder / "capture.csv", native_parameters=parameters,
-                host_interval=diagnostic["host_interval"], sensor_metadata=metadata, capture_interval=capture_interval, **options)
+                host_interval=diagnostic["host_interval"], sensor_metadata=metadata, capture_interval=capture_interval,
+                lis2dw_range=requested_range, **options)
             analyzer.analyze()
             if session.snapshot.mode == "ftm" and session.snapshot.ftm_global.get("S") == 0:
                 analyzer.warnings.append("FTM is disabled (M493 S0). Applying axis settings does not enable FTM; review and enable its motion mode separately.")

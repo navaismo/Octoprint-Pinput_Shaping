@@ -1,108 +1,186 @@
-<div id="settings_plugin_Pinput_Shaping">
-    <h4>Calibration settings</h4>
-    <p>Travel dimensions come from the active OctoPrint printer profile.
-        Changes apply to the next calibration session.</p>
-    <form class="form-horizontal">
-        <h4>Resonance Excitation</h4>
-        <div class="control-group">
-            <label class="control-label" for="pinput-backend">Resonance Excitation Backend</label>
-            <div class="controls"><select id="pinput-backend" data-bind="value: excitationBackend, disable: busy">
-                <option value="software">Software-generated Sweep (Legacy)</option>
-                <option value="marlin_m495">Native Marlin (M495)</option>
-            </select><p class="help-block">Save settings before starting calibration. Native movement is generated inside Marlin.</p></div>
-        </div>
-        <div class="alert alert-info">
-            Firmware: <strong data-bind="text: firmware().label"></strong>.
-            <button class="btn btn-small" data-bind="click: detectFirmware, enable: available">Detect firmware</button>
-        </div>
-            <div class="alert alert-info" aria-live="polite">
-                Native Marlin Resonance — M495 host events:
-                <strong data-bind="text: nativeCapability().state"></strong>.
-                Protocol: <span data-bind="text: nativeCapability().protocol ? 'PIS:RT v' + nativeCapability().protocol : 'Unknown'"></span>.
-                <span data-bind="text: nativeCapability().message"></span>
-                <button class="btn btn-small" data-bind="click: detectM495, enable: available">Detect M495 Support</button>
+<div id="settings_plugin_Pinput_Shaping" class="pinput-settings-container">
+    <div class="setting-group">
+        <h4 class="setting-title">Printer Size</h4>
+        <div class="form-inline-group">
+            <div class="form-inline-item">
+                <label for="pinput-size-x">X (mm)</label>
+                <input id="pinput-size-x" type="number" readonly data-bind="value: sizeX" title="Width from the active printer profile">
             </div>
-        <div data-bind="visible: nativeSelected">
-            <div class="alert alert-error" data-bind="visible: nativeValidation, text: nativeValidation"></div>
-            <div class="control-group"><label class="control-label" for="pinput-native-start">Start frequency (Hz)</label>
-                <div class="controls"><input id="pinput-native-start" type="number" min="5" max="199.99" step="0.01" data-bind="value: nativeStart, disable: busy"></div></div>
-            <div class="control-group"><label class="control-label" for="pinput-native-end">End frequency (Hz)</label>
-                <div class="controls"><input id="pinput-native-end" type="number" min="5.01" max="200" step="0.01" data-bind="value: nativeEnd, disable: busy"></div></div>
-            <div class="control-group"><label class="control-label" for="pinput-native-octave">Seconds per octave</label>
-                <div class="controls"><input id="pinput-native-octave" type="number" min="20" max="60" step="0.01" data-bind="value: nativeOctave, disable: busy"></div></div>
-            <div class="control-group"><label class="control-label" for="pinput-native-accel">Acceleration per Hz</label>
-                <div class="controls"><input id="pinput-native-accel" type="number" min="0.0001" step="0.0001" data-bind="value: nativeAccel, disable: busy"></div></div>
-            <div class="control-group"><label class="control-label" for="pinput-native-prep">Preparation timeout (s)</label>
-                <div class="controls"><input id="pinput-native-prep" type="number" min="30" max="240" data-bind="value: nativePrepareTimeout, disable: busy"></div></div>
-            <div class="control-group"><label class="control-label" for="pinput-native-cap">Maximum capture (s)</label>
-                <div class="controls"><input id="pinput-native-cap" type="number" min="30" max="480" data-bind="value: nativeMaxCapture, disable: busy"></div></div>
-            <div class="control-group"><label class="control-label" for="pinput-native-cancel">Cancellation timeout (s)</label>
-                <div class="controls"><input id="pinput-native-cancel" type="number" min="10" max="300" data-bind="value: nativeCancelTimeout, disable: busy"></div></div>
+            <div class="form-inline-item">
+                <label for="pinput-size-y">Y (mm)</label>
+                <input id="pinput-size-y" type="number" readonly data-bind="value: sizeY" title="Depth from the active printer profile">
+            </div>
+            <div class="form-inline-item">
+                <label for="pinput-size-z">Z (mm)</label>
+                <input id="pinput-size-z" type="number" readonly data-bind="value: sizeZ" title="Height from the active printer profile">
+            </div>
         </div>
-        <div class="control-group">
-            <label class="control-label" for="pinput-sensor">Accelerometer</label>
-            <div class="controls"><select id="pinput-sensor" data-bind="value: sensorType, disable: busy">
-                <option value="adxlspi">ADXL345 SPI</option>
-                <option value="adxlusb">ADXL345 USB</option>
-                <option value="lis2dw">LIS2DW USB</option>
-            </select></div>
-        </div>
-        <div class="control-group" data-bind="visible: sensorType() === 'lis2dw'">
-            <label class="control-label" for="pinput-lis2dw-rate">LIS2DW sample rate (Hz)</label>
-            <div class="controls"><select id="pinput-lis2dw-rate" data-bind="value: lis2dwRate, disable: busy">
-                <option value="800">800 Hz</option><option value="1600">1600 Hz</option>
-            </select><p class="help-block">Start at 800 Hz. Use 1600 Hz after verifying reliable acquisition.
-                This selects sensor samples per second; the analysis range is configured separately.</p></div>
-        </div>
-        <div class="control-group">
-            <label class="control-label" for="pinput-port">Sensor serial port</label>
-            <div class="controls"><input id="pinput-port" type="text" placeholder="/dev/serial/by-id/..."
-                data-bind="value: sensorPort, disable: busy">
-                <p class="help-block">USB sensors only. Use a stable device path distinct from the printer port.
-                    Blank uses /dev/ttyACM1 for ADXL345 USB or /dev/ttyACM0 for LIS2DW.</p></div>
-        </div>
-        <div class="control-group">
-            <label class="control-label" for="pinput-channel">Sensor channels</label>
-            <div class="controls"><select id="pinput-channel" data-bind="value: sensorAxis, disable: busy">
-                <option value="sum">Combined XYZ spectrum</option><option value="x">Sensor X</option>
-                <option value="y">Sensor Y</option><option value="z">Sensor Z</option>
-            </select><p class="help-block">Combined spectra tolerate different sensor orientations.</p></div>
-        </div>
-        <div class="control-group" data-bind="visible: !nativeSelected()">
-            <label class="control-label" for="pinput-accel-min">Start acceleration (mm/s²)</label>
-            <div class="controls"><input id="pinput-accel-min" type="number" min="1" data-bind="value: accelMin, disable: busy"></div>
-        </div>
-        <div class="control-group">
-            <label class="control-label" for="pinput-accel-max" data-bind="text: nativeSelected() ? 'Shaper smoothing ceiling (mm/s²)' : 'Maximum acceleration (mm/s²)'"></label>
-            <div class="controls"><input id="pinput-accel-max" type="number" min="1" data-bind="value: accelMax, disable: busy">
-                <p class="help-block" data-bind="text: nativeSelected() ? 'Caps the theoretical shaper acceleration estimate. Native excitation uses acceleration per Hz above.' : 'Must fit the reported firmware limit. This controls the excitation strength.'"></p></div>
-        </div>
-        <div class="control-group" data-bind="visible: !nativeSelected()">
-            <label class="control-label" for="pinput-freq-start">Analysis start (Hz)</label>
-            <div class="controls"><input id="pinput-freq-start" type="number" min="5" max="199" data-bind="value: freqStart, disable: busy">
-                <p class="help-block">Shaper fitting uses measured frequencies at or above 20 Hz.</p></div>
-        </div>
-        <div class="control-group" data-bind="visible: !nativeSelected()">
-            <label class="control-label" for="pinput-freq-end">Analysis end (Hz)</label>
-            <div class="controls"><input id="pinput-freq-end" type="number" min="21" max="200" data-bind="value: freqEnd, disable: busy"></div>
-        </div>
-        <div class="control-group" data-bind="visible: !nativeSelected()">
-            <label class="control-label" for="pinput-sweep-duration">Excitation duration (s)</label>
-            <div class="controls"><input id="pinput-sweep-duration" type="number" min="10" max="120" data-bind="value: sweepDuration, disable: busy">
-                <p class="help-block">Target duration; complete motion cycles may take longer.</p></div>
-        </div>
-        <div class="control-group">
-            <label class="control-label" for="pinput-damping">Damping ratio</label>
-            <div class="controls"><select id="pinput-damping" data-bind="value: dampingRatio, disable: busy">
-                <option value="0.05">0.05</option><option value="0.07">0.07</option>
-                <option value="0.1">0.10</option><option value="0.15">0.15</option>
-            </select></div>
-        </div>
-    </form>
-    <p data-bind="visible: !nativeSelected()">The software test varies acceleration over 1–5 mm strokes. The analysis range selects which measured vibration frequencies to inspect.</p>
-    <p data-bind="visible: nativeSelected">M495 controls homing, positioning and the frequency sweep inside Marlin.
-        Native calibration requires protocol-2 LIS2DW metadata and the PIS:RT v2 host-arming barrier with reliable acquisition throughout excitation.</p>
-    <p>LIS2DW calibration requires a wrapper that preserves precise, strictly increasing acquisition timestamps.
-        Captures with rounded or duplicate timestamps are rejected.</p>
-</div>
+        <p class="pinput-help">Dimensions follow the active OctoPrint printer profile.</p>
+    </div>
 
+    <div class="setting-group">
+        <h4 class="setting-title">Input Shaping Parameters</h4>
+        <div class="form-inline-group">
+            <div class="form-inline-item pinput-wide">
+                <label for="pinput-backend">Resonance excitation</label>
+                <select id="pinput-backend" data-bind="value: excitationBackend, disable: busy">
+                    <option value="software">Software-generated Sweep</option>
+                    <option value="marlin_m495">Native Marlin (M495)</option>
+                </select>
+            </div>
+        </div>
+        <div class="alert alert-error" role="alert" data-bind="visible: nativeValidation, text: nativeValidation"></div>
+        <div data-bind="visible: !nativeSelected()">
+            <div class="form-inline-group">
+                <div class="form-inline-item">
+                    <label for="pinput-accel-min">Min Accel (mm/s²)</label>
+                    <input id="pinput-accel-min" type="number" min="1" data-bind="value: accelMin, disable: busy" title="Starting acceleration for software excitation">
+                </div>
+                <div class="form-inline-item">
+                    <label for="pinput-accel-max">Max Accel (mm/s²)</label>
+                    <input id="pinput-accel-max" type="number" min="1" data-bind="value: accelMax, disable: busy" title="Must fit the reported firmware limit">
+                </div>
+            </div>
+            <div class="form-inline-group">
+                <div class="form-inline-item">
+                    <label for="pinput-freq-start">Start Freq (Hz)</label>
+                    <input id="pinput-freq-start" type="number" min="5" max="199" data-bind="value: freqStart, disable: busy" title="Start of the measured analysis range; shaper fitting starts at 20 Hz">
+                </div>
+                <div class="form-inline-item">
+                    <label for="pinput-freq-end">End Freq (Hz)</label>
+                    <input id="pinput-freq-end" type="number" min="21" max="200" data-bind="value: freqEnd, disable: busy" title="End of the measured analysis range">
+                </div>
+            </div>
+        </div>
+        <div data-bind="visible: nativeSelected">
+            <div class="form-inline-group">
+                <div class="form-inline-item">
+                    <label for="pinput-native-start">Start Freq (Hz)</label>
+                    <input id="pinput-native-start" type="number" min="5" max="199.99" step="0.01" data-bind="value: nativeStart, disable: busy">
+                </div>
+                <div class="form-inline-item">
+                    <label for="pinput-native-end">End Freq (Hz)</label>
+                    <input id="pinput-native-end" type="number" min="5.01" max="200" step="0.01" data-bind="value: nativeEnd, disable: busy">
+                </div>
+            </div>
+            <div class="form-inline-group">
+                <div class="form-inline-item">
+                    <label for="pinput-native-octave">Seconds per octave</label>
+                    <input id="pinput-native-octave" type="number" min="20" max="60" step="0.01" data-bind="value: nativeOctave, disable: busy">
+                </div>
+                <div class="form-inline-item">
+                    <label for="pinput-native-accel">Accel per Hz</label>
+                    <input id="pinput-native-accel" type="number" min="0.0001" step="0.0001" data-bind="value: nativeAccel, disable: busy">
+                </div>
+            </div>
+
+        </div>
+        <div class="form-inline-group">
+            <div class="form-inline-item" data-bind="visible: !nativeSelected()">
+                <label for="pinput-sweep-duration">Duration (s)</label>
+                <input id="pinput-sweep-duration" type="number" min="10" max="120" data-bind="value: sweepDuration, disable: busy" title="Target excitation duration; complete cycles can take longer">
+            </div>
+            <div class="form-inline-item" data-bind="visible: nativeSelected">
+                <label for="pinput-native-ceiling">Smoothing ceiling (mm/s²)</label>
+                <input id="pinput-native-ceiling" type="number" min="1" data-bind="value: accelMax, disable: busy" title="Caps the theoretical shaper acceleration estimate">
+            </div>
+            <div class="form-inline-item">
+                <label for="pinput-damping">Damping Ratio</label>
+                <select id="pinput-damping" data-bind="value: dampingRatio, disable: busy">
+                    <option value="0.05">0.05</option><option value="0.07">0.07</option>
+                    <option value="0.1">0.10</option><option value="0.15">0.15</option>
+                </select>
+            </div>
+        </div>
+            <details data-bind="visible: nativeSelected">
+                <summary>Native test time limits</summary>
+                <div class="form-inline-group">
+                    <div class="form-inline-item">
+                        <label for="pinput-native-prep">Preparation (s)</label>
+                        <input id="pinput-native-prep" type="number" min="30" max="240" data-bind="value: nativePrepareTimeout, disable: busy">
+                    </div>
+                    <div class="form-inline-item">
+                        <label for="pinput-native-cap">Max capture (s)</label>
+                        <input id="pinput-native-cap" type="number" min="30" max="480" data-bind="value: nativeMaxCapture, disable: busy">
+                    </div>
+                    <div class="form-inline-item">
+                        <label for="pinput-native-cancel">Cancellation (s)</label>
+                        <input id="pinput-native-cancel" type="number" min="10" max="300" data-bind="value: nativeCancelTimeout, disable: busy">
+                    </div>
+                </div>
+            </details>
+        <p class="pinput-help" data-bind="visible: !nativeSelected()">Software excitation varies acceleration over short strokes. Frequencies select the measured analysis range.</p>
+        <p class="pinput-help" data-bind="visible: nativeSelected">Marlin controls homing, positioning and the sweep. Native calibration requires PIS v2 support.</p>
+    </div>
+
+    <div class="setting-group">
+        <h4 class="setting-title">Select Accelerometer Type</h4>
+        <div class="form-inline-group">
+            <label class="pinput-sensor-choice" data-bind="css: {selected: sensorType() === 'adxlspi'}">
+                <input type="radio" name="pinput-sensor" value="adxlspi" data-bind="checked: sensorType, disable: busy"> ADXL345-SPI
+            </label>
+            <label class="pinput-sensor-choice" data-bind="css: {selected: sensorType() === 'adxlusb'}">
+                <input type="radio" name="pinput-sensor" value="adxlusb" data-bind="checked: sensorType, disable: busy"> ADXL345-USB
+            </label>
+            <label class="pinput-sensor-choice" data-bind="css: {selected: sensorType() === 'lis2dw'}">
+                <input type="radio" name="pinput-sensor" value="lis2dw" data-bind="checked: sensorType, disable: busy"> LIS2DW-USB
+            </label>
+        </div>
+        <div class="form-inline-group">
+            <div class="form-inline-item" data-bind="visible: sensorType() !== 'lis2dw'">
+                <label for="pinput-adxl-rate">Sample rate (Hz)</label>
+                <select id="pinput-adxl-rate" data-bind="value: adxlRate, disable: busy">
+                    <option value="800">800 Hz</option><option value="1600">1600 Hz</option><option value="3200">3200 Hz</option>
+                </select>
+            </div>
+            <div class="form-inline-item" data-bind="visible: sensorType() === 'lis2dw'">
+                <label for="pinput-lis2dw-rate">Sample rate (Hz)</label>
+                <select id="pinput-lis2dw-rate" data-bind="value: lis2dwRate, disable: busy">
+                    <option value="800">800 Hz</option><option value="1600">1600 Hz</option>
+                </select>
+            </div>
+            <div class="form-inline-item" data-bind="visible: sensorType() === 'lis2dw'">
+                <label for="pinput-lis2dw-range">Accelerometer Range</label>
+                <select id="pinput-lis2dw-range" data-bind="value: lis2dwRange, disable: busy">
+                    <option value="2">±2 g</option><option value="4">±4 g</option>
+                    <option value="8">±8 g</option><option value="16">±16 g</option>
+                </select>
+            </div>
+            <div class="form-inline-item">
+                <label for="pinput-channel">Sensor channels</label>
+                <select id="pinput-channel" data-bind="value: sensorAxis, disable: busy">
+                    <option value="sum">Combined XYZ</option><option value="x">Sensor X</option>
+                    <option value="y">Sensor Y</option><option value="z">Sensor Z</option>
+                </select>
+            </div>
+        </div>
+        <div class="form-inline-group" data-bind="visible: sensorType() !== 'adxlspi'">
+            <div class="form-inline-item pinput-wide">
+                <label for="pinput-port">Sensor serial port</label>
+                <input id="pinput-port" type="text" placeholder="/dev/serial/by-id/..." data-bind="value: sensorPort, disable: busy">
+            </div>
+        </div>
+        <p class="pinput-help" data-bind="visible: sensorType() !== 'adxlspi'">Use a sensor port distinct from the printer. Blank uses /dev/ttyACM1 for ADXL345 or /dev/ttyACM0 for LIS2DW.</p>
+        <p class="pinput-help" data-bind="visible: sensorType() !== 'lis2dw'">The ADXL345 wrappers use a fixed ±16 g range. The requested rate must be supported by the sensor firmware; capture timestamps and quality are checked before analysis.</p>
+        <p class="pinput-help" data-bind="visible: sensorType() === 'adxlspi'">SPI uses the installed adxl345spi wrapper and its fixed bus configuration. Enable SPI and configure passwordless sudo with the matching installer. USB port settings are ignored.</p>
+        <p class="pinput-help" data-bind="visible: sensorType() === 'lis2dw'">Start at 800 Hz. Use 1600 Hz after verifying reliable acquisition and precise timestamps.</p>
+        <p class="pinput-help" data-bind="visible: sensorType() === 'lis2dw'">Wider ranges reduce clipping. Ranges above ±2 g require a range-aware lis2dwusb wrapper and matching sensor firmware.</p>
+    </div>
+
+    <div class="setting-group">
+        <h4 class="setting-title">Firmware Detection</h4>
+        <div class="pinput-button-row">
+            <button class="btn btn-outline-primary btn-modern" data-bind="click: detectFirmware, enable: available">Detect firmware</button>
+            <button class="btn btn-outline-primary btn-modern" data-bind="click: detectM495, enable: available">Detect Native Marlin M495</button>
+        </div>
+        <div class="pinput-detection" aria-live="polite">
+            <p>Firmware: <strong data-bind="text: firmware().label"></strong></p>
+            <p>Native M495: <strong data-bind="text: nativeCapability().state"></strong>
+                <span data-bind="text: nativeCapability().protocol ? '(PIS v' + nativeCapability().protocol + ')' : ''"></span></p>
+        </div>
+        <p class="pinput-help">Detection saves settings automatically. Native v2 support also selects the native backend.</p>
+        <p class="pinput-help" data-bind="text: nativeCapability().message"></p>
+        <div class="alert alert-error" role="alert" data-bind="visible: error, text: error"></div>
+        <p class="pinput-help" data-bind="visible: summary, text: summary"></p>
+    </div>
+</div>

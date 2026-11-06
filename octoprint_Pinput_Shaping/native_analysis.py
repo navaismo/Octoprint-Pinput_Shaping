@@ -10,9 +10,10 @@ from scipy.signal import find_peaks, stft
 
 from .firmware import finite_number
 from .inputshaping_analyzer import InputShapingAnalyzer, MeasurementError
+from .lis2dw import scale_metadata
 
 
-def capture_metadata(path, sensor, rate, samples=None):
+def capture_metadata(path, sensor, rate, samples=None, requested_range=2, range_required=False):
     sidecar = Path(str(path) + ".meta.json")
     if not sidecar.exists():
         if sensor == "lis2dw":
@@ -20,12 +21,23 @@ def capture_metadata(path, sensor, rate, samples=None):
         return {"present": False}
     if sidecar.stat().st_size > 65536:
         raise MeasurementError("Sensor metadata exceeds its size limit")
-    with sidecar.open(encoding="utf-8") as stream:
-        metadata = json.load(stream)
+    try:
+        with sidecar.open(encoding="utf-8") as stream:
+            metadata = json.load(stream)
+    except (OSError, ValueError) as exc:
+        raise MeasurementError("Sensor metadata is unreadable or invalid") from exc
+    if not isinstance(metadata, dict):
+        raise MeasurementError("Sensor metadata must be an object")
     if (metadata.get("protocol") != 2 or metadata.get("valid") is not True
             or metadata.get("requested_rate") != rate or metadata.get("units") != "g"
-            or metadata.get("counts_per_g") != 16384 or metadata.get("clock") != "rp2040_fifo_poll"):
+            or (sensor != "lis2dw" and metadata.get("counts_per_g") != 16384)
+            or metadata.get("clock") != "rp2040_fifo_poll"):
         raise MeasurementError("Sensor protocol-2 metadata is invalid or incompatible")
+    if sensor == "lis2dw":
+        try:
+            metadata.update(scale_metadata(metadata, requested_range, required=range_required))
+        except ValueError as exc:
+            raise MeasurementError(str(exc)) from exc
     count = metadata.get("samples")
     if isinstance(count, bool) or not isinstance(count, int) or count < 16 or (samples is not None and count != samples):
         raise MeasurementError("CSV sample count does not match sensor metadata")
@@ -44,11 +56,13 @@ class NativeSweepAnalyzer(InputShapingAnalyzer):
     Unknown constant gain (including Marlin C) cancels in the relative response.
     This is not a calibrated absolute transfer function or a raw output PSD.
     """
-    def __init__(self, *args, native_parameters, host_interval, sensor_metadata=None, capture_interval=None, **kwargs):
+    def __init__(self, *args, native_parameters, host_interval, sensor_metadata=None, capture_interval=None,
+                 lis2dw_range=None, **kwargs):
         self.parameters = native_parameters
         self.host_interval = host_interval
         self.sensor_metadata = sensor_metadata
         self.capture_interval = capture_interval
+        self.lis2dw_range = lis2dw_range
         kwargs.update(min_freq=5, max_freq=max(21, native_parameters.end))
         super().__init__(*args, **kwargs)
         self.min_freq, self.max_freq = native_parameters.start, native_parameters.end
@@ -61,6 +75,13 @@ class NativeSweepAnalyzer(InputShapingAnalyzer):
         if self.capture_interval is not None and self.quality["duration"] < self.capture_interval * 0.98 - 1:
             raise MeasurementError("Sensor duration is incomplete relative to observed capture readiness/stop")
         metadata = self.sensor_metadata
+        if self.lis2dw_range is not None:
+            try:
+                scale = scale_metadata(metadata, self.lis2dw_range)
+            except ValueError as exc:
+                raise MeasurementError(str(exc)) from exc
+            self.quality["accelerometer"] = {**scale,
+                "range_negotiated": metadata.get("range_negotiated", scale["range_negotiated"])}
         if metadata and metadata.get("present") is not False:
             if metadata["samples"] != self.quality["samples"]:
                 raise MeasurementError("CSV sample count does not match sensor metadata")

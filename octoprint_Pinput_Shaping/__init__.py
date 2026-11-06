@@ -12,6 +12,7 @@ from octoprint.server.util.flask import restricted_access
 
 from .calibration import CalibrationController
 from .native_protocol import DEFAULTS as NATIVE_DEFAULTS
+from .capture import validate_sensor_settings
 
 
 class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
@@ -50,8 +51,38 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
         return {"sizeX": volume["width"], "sizeY": volume["depth"], "sizeZ": volume["height"],
                 "accelMin": 300, "accelMax": 2500, "freqStart": 5, "freqEnd": 132,
                 "sweepDuration": 20, "dampingRatio": "0.05",
-                "sensorType": "adxlspi", "sensorAxis": "sum", "sensorPort": "", "lis2dwRate": 800,
+                "sensorType": "adxlspi", "sensorAxis": "sum", "sensorPort": "", "adxlRate": 3200, "lis2dwRate": 800,
+                "lis2dwRange": 16,
+                "detectedFirmware": None, "detectedNative": None,
                 **NATIVE_DEFAULTS}
+
+    def get_settings_version(self):
+        return 1
+
+    def on_settings_migrate(self, target, current):
+        if current is None or current < 1:
+            saved = self._settings.get_all_data(merged=False) or {}
+            # Preserve the former fixed range for existing saved configurations.
+            # A new configuration uses the default; explicit ranges are retained.
+            if "lis2dwRange" not in saved and any(not key.startswith("_") for key in saved):
+                self._settings.set(["lis2dwRange"], 2)
+
+    def on_settings_save(self, data):
+        data = validate_sensor_settings(data)
+        return octoprint.plugin.SettingsPlugin.on_settings_save(self, data)
+
+    def _save_detection(self, kind, result):
+        # Saved detection reports are informational; live capabilities still
+        # expire on reconnect and are never restored from these settings.
+        key = "detectedNative" if kind == "detect_native" else "detectedFirmware"
+        changes = {key: result}
+        if kind == "detect_native" and result.get("state") == "supported" and result.get("protocol") == 2:
+            changes["excitationBackend"] = "marlin_m495"
+        for name, value in changes.items():
+            self._settings.set([name], value)
+        self._settings.save()
+        self._logger.info("Detection settings saved: %s; backend=%s", key, self._settings.get(["excitationBackend"]))
+        return changes
 
     def get_template_configs(self):
         return [
@@ -62,18 +93,19 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
         ]
 
     def get_assets(self):
-        return {"js": ["js/pinput_shaping.js"]}
+        return {"js": ["js/pinput_shaping.js"], "css": ["css/pinput_shaping.css"]}
 
     def on_after_startup(self):
         self.configure_logger()
         keys = ("accelMin", "accelMax", "freqStart", "freqEnd", "sweepDuration",
-                "dampingRatio", "sensorType", "sensorAxis", "sensorPort", "lis2dwRate", *NATIVE_DEFAULTS)
+                "dampingRatio", "sensorType", "sensorAxis", "sensorPort", "adxlRate", "lis2dwRate", "lis2dwRange", *NATIVE_DEFAULTS)
         self.controller = CalibrationController(
             self._printer, self._printer_profile_manager.get_current_or_default,
             lambda: {key: self._settings.get([key]) for key in keys},
             self.get_plugin_data_folder(),
             lambda payload: self._plugin_manager.send_plugin_message(self._identifier, payload),
             logger=self._logger,
+            persist_detection=self._save_detection,
         )
         self._logger.info("Input shaping ready; firmware detection is available on demand")
 
@@ -121,6 +153,10 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
                 return flask.jsonify(success=True)
             if command not in operations:
                 return flask.jsonify(success=False, error="Unknown command"), 400
+            # Simple API retains its routing command in the JSON body. Remove
+            # only the matching envelope field before validating operation data.
+            if data.get("command") == command:
+                data = {key: value for key, value in data.items() if key != "command"}
             payload = data.get("data", {}) if command in ("run_axis_test", "run_resonance_test") else data
             if not isinstance(payload, dict):
                 raise ValueError("Command data must be an object")

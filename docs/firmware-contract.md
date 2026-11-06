@@ -46,6 +46,36 @@ baseline with identical current configuration/version, v2 uses 28,468 bytes
 static RAM (+8) and 254,652 bytes flash (+1,384). It leaves native equations and
 software excitation unchanged. No physical printer or firmware flash was used.
 
+The LIS2DW full-scale integration follow-up passed 409 pytest checks, including
+the live c13 shaping comparison, native v2 lifecycle, software mode, settings
+migration/persistence and all four sensor ranges. Frontend checks passed with
+both offline interfaces and real OctoPrint Knockout. The unchanged C wrapper
+was compiled into a temporary directory and exercised against a paced PTY
+sensor emulator at 800 Hz for 2, 4, 8 and 16 g: each case verified fresh
+timestamp readiness, 4096 samples, range/scale metadata, g-valued CSV and a
+50 Hz synthetic resonance. Firefox previews verified the actual settings
+template and range selector at desktop/mobile sizes. These offline results do
+not replace a complete physical native calibration initiated by this plugin.
+No RP2040 firmware, wrapper or Marlin source was modified in this follow-up.
+
+The cross-sensor acquisition review passed 504 pytest checks, including the
+live c13 C++ contract, ADXL rate persistence, frozen software capture options,
+native ADXL completion and failure/cancellation paths. After removing the
+missing metadata download link for legacy ADXL, all 84 native lifecycle tests
+passed again. Frontend checks passed with both the offline interfaces and real
+OctoPrint Knockout; a browser exercised the actual USB/SPI selectors and rate
+settings. Only existing Matplotlib dependency deprecation warnings were emitted.
+
+The unmodified ADXL USB wrapper at `e7c6f186` was exercised against a paced PTY
+device, and the installer's SPI C wrapper at `13487d93` against a compiled
+pigpio shim, at 800, 1600 and 3200 Hz. All six cases verified fresh timestamp
+readiness, Q/EOF shutdown, g-valued CSV and a synthetic 50 Hz resonance. The
+shim uses a simulated acquisition clock, not Raspberry Pi scheduling. The
+unchanged LIS2DW C wrapper also passed the PTY checks at all four ranges.
+These are host integration tests; none validate physical USB throughput, SPI
+timing, sensor ODR, bandwidth or mounting. No wrapper, sensor firmware, Marlin
+source, installation or physical device was changed during this review.
+
 ## Reference firmware
 
 This branch was checked against the local `Marlin_c13_octoprint` checkout at
@@ -77,7 +107,11 @@ Connection scripts and external commands take precedence over detection;
 the operator can request another check when the printer is idle again.
 The tab exposes detection state, protocol and permitted shaper candidates.
 Disconnects clear the cached protocol and result, requiring a new request.
-No detection probe homes, moves, changes coordinate modes or writes settings.
+No detection probe homes, moves, changes coordinate modes or writes printer
+settings. The buttons save the displayed plugin settings before probing and
+persist the completed detection report afterward. Explicit native v2 detection
+also selects and saves the native backend. Persisted detection reports are
+informational; fresh live detection is still required after reconnect.
 Explicit calibration, application and recovery operations still read fresh
 settings as part of their validation and restoration; cached detection cannot
 replace those checks.
@@ -108,7 +142,10 @@ No recommendation sends an unscoped frequency command or writes EEPROM.
 Legacy detection permits only ZV. FTM allows manual selection among shapers
 fitted in the current saved measurement, defaulting to the recommendation.
 The application API accepts a session identifier and an optional shaper name;
-omitting the name applies the recommendation. The backend retrieves that
+omitting the name applies the recommendation. OctoPrint's Simple API includes
+`command: "apply_result"` in the request body; the adapter removes this matching
+routing field before validating the application payload. Other command values
+and parameter overrides remain rejected. The backend retrieves that
 candidate's saved frequency and the measurement's damping and tolerance,
 rebuilds the axis-specific command and rejects arbitrary commands or parameter
 overrides. Selecting a shaper without a saved fit is rejected. Every application obtains
@@ -196,11 +233,14 @@ barriers (`M400`) and `M112` remain available. A blocked command is logged with
 its session, stage and tags, and its G-code appears in the cancellation message. This is host-side ownership, not a physical machine lock: LCD or
 independent host actions must not change the printer during a test.
 
-Prepare coordinate modes explicitly before motion. The preparation action sets
+Axis tests and X/Y calibration prepare unknown or imperial coordinate modes
+inside their owned worker session, before snapshots or motion. This sets
 millimeters, absolute positioning, absolute extrusion and a 1500 mm/min feed
-rate without commanding an axis displacement. Later tests restore the modes
-and feed rate observed before their session. Unknown modes after reconnect
-require preparation again.
+rate without commanding an axis displacement. The confirmed preparation is
+the test/recovery baseline when previous modes were unknown or imperial;
+unknown previous settings are never inferred. Already known millimeter modes
+and feed rate retain the existing restoration behavior. The separate Prepare
+UI action is removed; its API remains compatible for existing callers.
 
 A durable `recovery_required.json` is written before changing firmware state.
 Shaping, acceleration, advanced motion settings and speed percentage are
@@ -254,22 +294,38 @@ path retains the upstream defaults: ADXL USB `/dev/ttyACM1`, LIS2DW
 
 LIS2DW sampling is selected in plugin settings with `lis2dwRate`: 800 Hz by
 default, or 1600 Hz explicitly. Both the sensor precheck and full capture use
-the session's frozen selection. ADXL sampling remains 3200 Hz. No automatic
+the session's frozen selection. ADXL uses the independent `adxlRate` selection
+of 800, 1600 or 3200 Hz, defaulting to the previous 3200 Hz. No automatic
 rate fallback occurs after a failed capture. The analyzer uses measured sample
 times rather than the requested rate and retains its 2.5-times-end-frequency
 gate; the reported effective rate near 797 Hz covers analysis up to 200 Hz.
 
-The legacy LIS2DW wrapper pinned by the installer stamps host receipt times rounded to milliseconds.
-Its sensor-value check remains usable, but high-rate resonance captures fail
-timestamp validation before homing. A precise acquisition-clock protocol is
-needed in the external sensor firmware/wrapper; fabricated uniform timestamps
-would conceal dropped samples and are not a substitute. The plugin cannot
-repair that external timing contract by itself.
-The separately installed protocol 2 wrapper announces device FIFO-edge timing
-and preserves the same CSV and Q/EOF interface. It remains subject to the
-plugin's timestamp validation and must stay alive until the requested stop;
-the readiness banner alone does not establish capture validity. This change
-does not update the installer's pinned revision or flash the sensor firmware.
+LIS2DW full scale is independently selected with `lis2dwRange`: 2, 4, 8 or
+16 g. New configurations default to 16 g; migration retains the former 2 g
+range for existing saved configurations without a range field. Explicit saved
+values remain unchanged. Both precheck and capture use the frozen session
+range, passed as `-r` to range-aware wrappers. Unsupported nondefault ranges
+are rejected before native preparation, without fallback or retries. Legacy
+wrappers are allowed only at 2 g; native captures still require protocol 2.
+Negotiated startup must report matching verified READY range/scale, and the
+completed metadata must confirm requested range, actual range, g units and
+the corresponding scale: 16384/8192/4096/2048 counts/g for 2/4/8/16 g.
+Missing or contradictory negotiated metadata is rejected. Native analysis
+records the verified range/scale and uses CSV g values directly; no second
+conversion or analysis-equation change is made. Range-aware wrappers and
+matching RP2040 firmware are installed separately by the operator.
+
+The LIS2DW installer now pins main-branch revision
+`cc660288df4aed9c7106623c12f2587ed6314a65`, including protocol 2 and range
+selection. It compiles the wrapper on the target host using the shared
+protocol header and grants serial-group access. Matching RP2040 firmware is
+still installed separately by the operator. The wrapper announces device
+FIFO-edge timing and preserves the CSV and Q/EOF interface. It remains
+subject to the plugin's timestamp validation and must stay alive until the
+requested stop; the readiness banner alone does not establish capture validity.
+Older wrappers that stamp host receipt rounded to milliseconds cannot provide
+valid high-rate capture timing. The plugin never fabricates sample clocks to
+work around that limitation.
 
 Run artifacts live in OctoPrint's plugin data folder under `runs/<session>/`.
 Authenticated downloads require status permission. Runtime artifacts are not
@@ -288,3 +344,18 @@ while the calibration worker waits for printer motion. Driver errors are kept
 in that log; unexpected exits report the driver, exit code or signal and the
 log path. A passed sensor precheck does not guarantee that the later capture
 will survive motion or a connection failure.
+
+ADXL345 USB and SPI have an independent `adxlRate` setting (800, 1600 or
+3200 Hz), defaulting to the previous 3200 Hz. The selected rate is frozen with
+the session and used in both acquisition backends and native diagnostics.
+LIS2DW rate/range negotiation never runs for ADXL. SPI ignores saved USB ports.
+Legacy ADXL CSV has no protocol-2 sidecar; native analysis accepts it through
+the existing timestamp, signal-quality and complete-sweep checks without
+inventing LIS2DW scale or clock metadata. All CSV acceleration remains in g.
+
+The pinned ADXL USB firmware configures 100 Hz sensor ODR (`BW_RATE=0x0A`)
+and only changes polling frequency on `F=`. Physical high-rate compatibility
+therefore requires a separate firmware review/validation; plugin settings
+cannot repair that register configuration. Legacy ADXL has no device-side
+integrity/completion negotiation. No physical compatibility guarantee follows
+from process startup or successful offline tests alone.

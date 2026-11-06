@@ -55,13 +55,18 @@ def native(controller, settings, monkeypatch):
                     raise RuntimeError("Accelerometer failed before becoming ready")
                 if controller.scenario == "slow_start":
                     clock.advance(20)
-                count = sweep(self.path, rate=100 if controller.scenario == "low_rate" else 800)
+                count = sweep(self.path, rate=100 if controller.scenario == "low_rate" else int(self.rate))
             else:
                 super().start()
                 count = 6400
+            if self.range_g is None:
+                return  # Legacy ADXL wrappers produce CSV without a LIS sidecar.
             metadata = {"protocol": 2, "valid": not (controller.scenario == "bad_metadata" and self.path.name == "capture.csv"),
                 "requested_rate": 800, "effective_rate": 800, "samples": count, "max_window_us": 20,
                 "units": "g", "counts_per_g": 16384, "clock": "rp2040_fifo_poll"}
+            if "lis2dwRange" in settings:
+                metadata.update(requested_range_g=int(self.range_g), range_g=int(self.range_g),
+                                counts_per_g=32768 // int(self.range_g))
             self.path.with_name(self.path.name + ".meta.json").write_text(json.dumps(metadata))
             if controller.scenario == "incomplete_csv" and self.path.name == "capture.csv":
                 self.path.write_text("\n".join(self.path.read_text().splitlines()[:-100]) + "\n")
@@ -275,6 +280,70 @@ def test_native_success_requires_complete_and_valid_metadata_with_no_g1_excitati
     assert not native.printer.hold
 
 
+@pytest.mark.parametrize("full_scale", [2, 4, 8, 16])
+def test_native_range_selection_preserves_pis_v2_lifecycle(native, settings, full_scale, caplog):
+    settings["lis2dwRange"] = full_scale
+    detect(native)
+    with caplog.at_level(logging.INFO):
+        identifier = run(native)
+    assert native.error is None
+    assert native.result["recommendation_valid"]
+    assert native.result["quality"]["accelerometer"]["range_g"] == full_scale
+    folder = native.data_folder / "runs" / identifier
+    diagnostic = json.loads((folder / "excitation.json").read_text())
+    analysis = json.loads((folder / "analysis.json").read_text())
+    assert analysis["quality"]["accelerometer"]["counts_per_g"] == 32768 // full_scale
+    assert diagnostic["requested_range_g"] == full_scale
+    assert diagnostic["metadata"]["range_g"] == full_scale
+    assert [event["event"]["kind"] for event in diagnostic["events"]] == [
+        "HOMED", "ARMED_WAIT", "ARM_ACK", "START", "COMPLETE"]
+    assert f"actual range=+/-{full_scale} g, counts_per_g={32768 // full_scale}, units=g" in caplog.text
+    assert native.sensor_verified and native.arm_sent
+    assert not any(cmd.startswith(("G1", "G28")) for cmd in native.printer.sent_commands)
+
+
+@pytest.mark.parametrize("sensor", ["adxlspi", "adxlusb"])
+@pytest.mark.parametrize("rate", [800, 1600, 3200])
+def test_native_adxl_accepts_legacy_csv_and_preserves_arming(native, settings, snapshot, sensor, rate):
+    settings.update(sensorType=sensor, adxlRate=rate, lis2dwRate=1600, lis2dwRange=16)
+    detect(native)
+    identifier = run(native)
+    assert native.error is None
+    assert native.result["recommendation_valid"]
+    assert abs(native.result["base_freq"] - 40) < 1.5
+    assert native.result["quality"]["sampling_rate"] == pytest.approx(rate)
+    assert native.sensor_verified and native.arm_sent
+    folder = native.data_folder / "runs" / identifier
+    diagnostic = json.loads((folder / "excitation.json").read_text())
+    assert diagnostic["sensor"] == sensor and diagnostic["requested_rate"] == rate
+    assert diagnostic["metadata"] == {"present": False}
+    assert not (folder / "capture.csv.meta.json").exists()
+    assert "metadata" not in native.result["files"], "Legacy ADXL must not advertise a missing LIS sidecar"
+    assert [item["event"]["kind"] for item in diagnostic["events"]] == [
+        "HOMED", "ARMED_WAIT", "ARM_ACK", "START", "COMPLETE"]
+    assert snapshot.matches(native.printer.snapshot)
+    assert not any(cmd.startswith(("G1", "G28")) for cmd in native.printer.sent_commands)
+
+
+@pytest.mark.parametrize("sensor", ["adxlspi", "adxlusb"])
+@pytest.mark.parametrize("scenario", ["failed_start", "stalled_readiness", "sensor_fail_before_ack",
+                                      "sensor_exit", "cancel_wait", "cancel_excitation", "save_failure"])
+def test_native_adxl_failures_stop_without_recommendation(native, settings, snapshot, sensor, scenario):
+    settings.update(sensorType=sensor, adxlRate=800)
+    detect(native)
+    native.scenario = scenario
+    run(native)
+    assert native.error and native.result is None
+    if scenario == "save_failure":
+        assert native.native_terminal, "The sweep already completed before saving failed"
+        assert "M496" not in native.printer.sent_commands
+    else:
+        assert "M496" in native.printer.sent_commands
+    assert snapshot.matches(native.printer.snapshot)
+    assert not native.printer.hold and not native.journal.exists()
+    assert not any(event["type"] == "results_ready" for event in native.events)
+
+
 @pytest.mark.parametrize("scenario", ["no_start", "no_complete", "error_before", "aborted_before",
     "cancel_preparation", "cancel_excitation", "sensor_exit", "bad_metadata", "low_rate",
     "duplicate_start", "duplicate_terminal", "incomplete_csv", "save_failure", "failed_start",
@@ -484,3 +553,49 @@ def test_conflicting_v2_query_error_cannot_establish_support(native):
     run(native, "detect_native")
     assert native.native_capability["state"] != "supported"
     assert not native.native_unresolved
+
+
+def test_native_prepares_coordinates_before_m495_without_capturing_during_preparation(native):
+    detect(native)
+    native.modes = dict(units=None, xyz=None, extruder=None, feed=None)
+    before = len(native.printer.sent_commands)
+    run(native)
+    assert native.error is None
+    commands = native.printer.sent_commands[before:]
+    assert commands[:4] == ["G21", "G90", "M82", "G1 F1500"]
+    assert commands.index("G21") < next(i for i, cmd in enumerate(commands) if cmd.endswith(" S W"))
+    assert native.result["recommendation_valid"]
+
+
+def test_native_analysis_results_and_warnings_are_logged_with_both_ids(native, caplog):
+    detect(native)
+    native.printer.snapshot.ftm_global["S"] = 0
+    with caplog.at_level(logging.INFO):
+        identifier = run(native)
+    assert f"Calibration session {identifier} (firmware ID {native.native_id}) analysis complete:" in caplog.text
+    assert "backend=marlin_m495, axis=X" in caplog.text
+    assert f"recommended={native.result['best_shaper']}" in caplog.text
+    assert "fitted ZV: frequency=" in caplog.text
+    assert "analysis warning: FTM is disabled" in caplog.text
+
+
+def test_native_diagnostic_only_analysis_logs_no_recommendation(native, caplog, monkeypatch):
+    import sys
+    original = sweep
+    monkeypatch.setattr(sys.modules[__name__], "sweep", lambda path, **kwargs: original(path, gain=0, **kwargs))
+    detect(native)
+    with caplog.at_level(logging.INFO):
+        run(native)
+    assert native.error is None
+    assert not native.result["recommendation_valid"]
+    assert "recommendation_valid=False, recommended=none" in caplog.text
+    assert "analysis warning: No confident interior resonance" in caplog.text
+
+
+def test_manual_native_detection_persists_result_and_backend_notification(native):
+    saved = []
+    native.persist_detection = lambda kind, report: saved.append((kind, report)) or {"excitationBackend": "marlin_m495"}
+    detect(native)
+    assert saved == [("detect_native", native.native_capability)]
+    assert any(event["type"] == "detection_saved" and event["settings"]["excitationBackend"] == "marlin_m495"
+               for event in native.events)

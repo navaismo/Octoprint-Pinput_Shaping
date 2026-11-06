@@ -1,0 +1,61 @@
+{
+  "upstream_repository": "MarlinFirmware/Marlin",
+  "upstream_ref": "bugfix-2.1.x",
+  "upstream_commit": "de15c7b9d4e4485cd05ed857ef8b74bd2c4de7d0",
+  "protocol_source_repository": "navaismo/Marlin_bugfix_2.1_E3V3SE",
+  "protocol_source_commit": "244be9d8012cca3c4eb1efbfa084f1f9df0fa1d4",
+  "files": {
+    "Marlin/Configuration_adv.h": {
+      "before_sha256": "3352685d65f9597464a02692963103fe9cff02e8b3fe889fec97b26ce87a4c70",
+      "after_sha256": "d3b03cb76e74360a76bf8cfff5f8627d658ccccfeee6b634801c203832321c26"
+    },
+    "Marlin/src/MarlinCore.cpp": {
+      "before_sha256": "ab4cf2eca5d63480c1bdec53706bbda7bcc42bf38b8a98c8e425b5b9426d6768",
+      "after_sha256": "8c5f2e9333529dae7c405eb056fd16d8b936bb0aec4f236023e6c4707a793c36"
+    },
+    "Marlin/src/feature/resonance/resonance_generator.cpp": {
+      "before_sha256": "1ded563ceadd795826fe2795a68b52a20ab97eac992b54ec125ba2088c5cf735",
+      "after_sha256": "824a3c1b1cc9c470f8538bd5e065eb67a24c30b80a69d3fe18bfc34329fa6f8f"
+    },
+    "Marlin/src/feature/resonance/resonance_generator.h": {
+      "before_sha256": "8081a50e134063370d38791e57207bf3cc0a5540e3b5568fde79587d00ecca0f",
+      "after_sha256": "90377dce641f856dd769fd74025dc6d9662cdb3fa4422a2833e924a668963ebf"
+    },
+    "Marlin/src/feature/resonance/resonance_host_events.cpp": {
+      "before_sha256": null,
+      "after_sha256": "a6751597b02afa0ad5e9c44394ca225eb01a7bd450249da358872b17125925eb"
+    },
+    "Marlin/src/feature/resonance/resonance_host_events.h": {
+      "before_sha256": null,
+      "after_sha256": "af2284dbc5bb19a6f851c83687bb793d711958ba3a7761d5cc36879912cb411f"
+    },
+    "Marlin/src/gcode/feature/resonance/M495_M496.cpp": {
+      "before_sha256": "5ca389f9da55c66b4c63a6717db9d3abea4abc7f91b2f109367f603062844d98",
+      "after_sha256": "08fe54faa61d5258e229ddb1b190da00d83abd158c51e83ccf9fa6a3c410bc62"
+    },
+    "Marlin/src/gcode/gcode.cpp": {
+      "before_sha256": "11b42a761e202c87fb9c2e80466d7c05015545ec98637dfa6dfcea2f13da1835",
+      "after_sha256": "a612a09f879d31ac61dec233f74105a438b01d1eafd15acfef469c910cb528bd"
+    },
+    "Marlin/src/inc/SanityCheck.h": {
+      "before_sha256": "dccf5af759fb62b46cdaa694c3001ead378aefd61d89cb6fcde91155cf62b765",
+      "after_sha256": "fe6432711880b8e8969792d089b1388646c62cea22cee5e0f31f0c6ebd614452"
+    },
+    "buildroot/tests/resonance_host_events/mock_marlin.h": {
+      "before_sha256": null,
+      "after_sha256": "1d026ca6f614fcd289f89d1303d1c3941e3a811483f43e3d285250ed87935579"
+    },
+    "buildroot/tests/resonance_host_events/test_protocol.cpp": {
+      "before_sha256": null,
+      "after_sha256": "d3ab8d6d5b1ce131ecb9368f67a4ebd5a3420424e819afffb3aca3109b1d242f"
+    },
+    "buildroot/tests/resonance_host_events/test_protocol.py": {
+      "before_sha256": null,
+      "after_sha256": "f212f0f0842e008ed1eb0526749f58dd8147ce8ecb72cde143729a0e67c5ec6c"
+    },
+    "docs/resonance-host-events.md": {
+      "before_sha256": null,
+      "after_sha256": "4082223b6c521102b0bff0533b3941e11d235d5b79a13576cae9befc4d4d5bab"
+    }
+  }
+}

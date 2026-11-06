@@ -1,16 +1,54 @@
 """Accelerometer process lifecycle with an explicit file-ready handshake."""
 
 import csv
+import json
 import math
 import os
 import re
 import shutil
+import subprocess
 import threading
 import time
 
 import pexpect
 
 from .firmware import finite_number
+from .lis2dw import COUNTS_PER_G, RANGE_UPGRADE, scale_metadata, validate_range
+
+
+def sampling_rate(sensor, settings):
+    """Resolve the active sensor's rate without borrowing another driver's options."""
+    lis = sensor == "lis2dw"
+    rates = (800, 1600) if lis else (800, 1600, 3200)
+    label = "LIS2DW" if lis else "ADXL345"
+    rate = finite_number(settings.get("lis2dwRate" if lis else "adxlRate", 800 if lis else 3200),
+                         label + " sampling rate")
+    if rate not in rates:
+        raise ValueError(label + " sampling rate must be " + ", ".join(map(str, rates)) + " Hz")
+    return int(rate)
+
+
+def validate_port(port):
+    if not isinstance(port, str) or (port and not re.fullmatch(
+            r"/dev/(?:tty(?:ACM|USB)\d+|serial/by-id/[A-Za-z0-9_.:+-]+)", port)):
+        raise ValueError("Use a sensor serial device under /dev/ttyACM*, /dev/ttyUSB*, or /dev/serial/by-id/")
+
+
+def validate_sensor_settings(settings):
+    """Validate partial settings before OctoPrint persists any of them."""
+    settings = dict(settings)
+    if "sensorType" in settings and settings["sensorType"] not in AccelerometerCapture.DRIVERS:
+        raise ValueError("Unsupported accelerometer type")
+    if "sensorAxis" in settings and settings["sensorAxis"] not in ("sum", "x", "y", "z"):
+        raise ValueError("Sensor axis must be x, y, z, or sum")
+    for key, sensor in (("adxlRate", "adxlusb"), ("lis2dwRate", "lis2dw")):
+        if key in settings:
+            settings[key] = sampling_rate(sensor, settings)
+    if "lis2dwRange" in settings:
+        settings["lis2dwRange"] = validate_range(settings["lis2dwRange"])
+    if "sensorPort" in settings:
+        validate_port(settings["sensorPort"])
+    return settings
 
 
 class AccelerometerCapture:
@@ -18,18 +56,19 @@ class AccelerometerCapture:
                "adxlusb": ("adxl345usb", False, 3200),
                "lis2dw": ("lis2dwusb", False, 800)}
 
-    def __init__(self, sensor_type, path, check_cancel=lambda: None, port="", lis2dw_rate=800):
+    def __init__(self, sensor_type, path, check_cancel=lambda: None, port="", lis2dw_rate=800, lis2dw_range=2,
+                 adxl_rate=3200):
         if sensor_type not in self.DRIVERS:
             raise ValueError("Unsupported accelerometer type")
         self.driver, self.needs_sudo, self.rate = self.DRIVERS[sensor_type]
-        if sensor_type == "lis2dw":
-            rate = finite_number(lis2dw_rate, "LIS2DW sampling rate", 800, 1600)
-            if rate not in (800, 1600):
-                raise ValueError("LIS2DW sampling rate must be 800 or 1600 Hz")
-            self.rate = int(rate)
-        self.port = port or {"adxlusb": "/dev/ttyACM1", "lis2dw": "/dev/ttyACM0"}.get(sensor_type, "")
-        if self.port and not re.fullmatch(r"/dev/(?:tty(?:ACM|USB)\d+|serial/by-id/[A-Za-z0-9_.:+-]+)", self.port):
-            raise ValueError("Use a sensor serial device under /dev/ttyACM*, /dev/ttyUSB*, or /dev/serial/by-id/")
+        self.rate = sampling_rate(sensor_type, {"lis2dwRate": lis2dw_rate, "adxlRate": adxl_rate})
+        self.range_g = validate_range(lis2dw_range) if sensor_type == "lis2dw" else None
+        self.range_negotiated = False
+        self._range_option = None
+        self.metadata = None
+        self.port = "" if self.needs_sudo else (port or {
+            "adxlusb": "/dev/ttyACM1", "lis2dw": "/dev/ttyACM0"}.get(sensor_type, ""))
+        validate_port(self.port)
         self.path = str(path)
         self.child = None
         self.logfile = None
@@ -87,7 +126,7 @@ class AccelerometerCapture:
             pass
         return None
 
-    def _failure(self, message):
+    def _failure(self, message, range_hint=False):
         details = [self.driver]
         if self.child is not None:
             if not self._is_alive() and not self.child.closed:
@@ -105,7 +144,58 @@ class AccelerometerCapture:
         device_error = self._device_error()
         if device_error:
             details.append(f"device error: {device_error}")
+        if self.range_negotiated:
+            details.append(f"requested +/-{self.range_g} g")
+            if range_hint:
+                details.append(RANGE_UPGRADE)
         return RuntimeError(f"{message} ({', '.join(details)}); inspect {self.path}.log")
+
+    def _range_arguments(self, binary):
+        if self.range_g is None:
+            return []
+        if self._range_option is None:
+            # Help does not open the sensor. Refuse unsupported nondefault ranges
+            # before native preparation; never retry acquisition at another range.
+            try:
+                result = subprocess.run([binary, "-h"], stdin=subprocess.DEVNULL,
+                    stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True, timeout=3, check=False)
+            except (OSError, subprocess.TimeoutExpired) as exc:
+                raise RuntimeError("Could not check lis2dwusb range support. " + RANGE_UPGRADE) from exc
+            if result.returncode != 0:
+                raise RuntimeError("Could not check lis2dwusb range support. " + RANGE_UPGRADE)
+            self._range_option = bool(re.search(r"(?:^|[\s\[])-r(?=[\s=,|\]])", result.stdout))
+        if not self._range_option and self.range_g != 2:
+            raise RuntimeError("Installed lis2dwusb does not support -r range selection. " + RANGE_UPGRADE)
+        self.range_negotiated = self._range_option
+        return ["-r", str(self.range_g)] if self.range_negotiated else []
+
+    def _range_ready(self):
+        """Check the wrapper's verified READY report before accepting startup."""
+        if not self.range_negotiated:
+            return True
+        self.logfile.flush()
+        with open(self.path + ".log", encoding="utf-8") as stream:
+            report = re.search(r"Range: \+/- (\d+) g, (\d+) counts/g \(verified READY\)", stream.read(16384))
+        if report is None:
+            return False
+        if (int(report[1]) != self.range_g or int(report[2]) != COUNTS_PER_G[self.range_g]):
+            raise RuntimeError("LIS2DW verified READY range/scale does not match the requested range. " + RANGE_UPGRADE)
+        return True
+
+    def _range_metadata(self):
+        if not self.range_negotiated:
+            return
+        try:
+            with open(self.path + ".meta.json", encoding="utf-8") as stream:
+                payload = stream.read(65537)
+            if len(payload) > 65536:
+                raise ValueError("Sensor metadata exceeds its size limit")
+            metadata = json.loads(payload)
+            if metadata.get("protocol") != 2 or metadata.get("valid") is not True:
+                raise ValueError("LIS2DW capture requires valid protocol-2 metadata")
+            self.metadata = {**metadata, **scale_metadata(metadata, self.range_g, required=True)}
+        except (OSError, ValueError, AttributeError) as exc:
+            raise RuntimeError(f"LIS2DW range metadata validation failed: {exc}. {RANGE_UPGRADE}") from exc
 
     def prepare(self):
         """Validate launch configuration without opening the sensor or recording."""
@@ -114,7 +204,8 @@ class AccelerometerCapture:
             raise RuntimeError(f"Install the {self.driver} wrapper before calibration")
         if os.path.exists(self.path):
             raise RuntimeError("Capture path already exists; refusing to reuse old data")
-        args = (["-p", self.port] if self.port and not self.needs_sudo else []) + ["-f", str(self.rate), "-s", self.path]
+        args = (["-p", self.port] if self.port and not self.needs_sudo else []) + ["-f", str(self.rate)]
+        args += self._range_arguments(binary) + ["-s", self.path]
         executable = binary
         if self.needs_sudo:
             executable, args = "sudo", ["-n", binary] + args
@@ -145,21 +236,23 @@ class AccelerometerCapture:
                 if self._output_error:
                     raise self._failure("Could not read accelerometer output")
                 if not self._is_alive():
-                    raise self._failure("Accelerometer exited before data became available")
+                    raise self._failure("Accelerometer exited before data became available", range_hint=True)
                 if os.path.isfile(self.path):
                     with open(self.path, newline="", encoding="utf-8") as stream:
                         rows = list(csv.reader(stream.read(16384).splitlines()))
                     if rows and [x.strip().lower() for x in rows[0]] != ["time", "x", "y", "z"]:
                         raise RuntimeError("Accelerometer returned an unsupported CSV format")
-                    if len(rows) >= 17:
+                    if len(rows) >= 17 and self._range_ready():
                         self.last_size = os.path.getsize(self.path)
                         self.last_progress = time.monotonic()
                         self.host_times["ready"] = self.last_progress
                         return
                 time.sleep(0.05)
+            if self.range_negotiated and not self._range_ready():
+                raise RuntimeError("LIS2DW did not confirm the requested range/scale before capture readiness. " + RANGE_UPGRADE)
             raise RuntimeError("Accelerometer did not produce samples before the start deadline")
         except pexpect.EOF as exc:
-            error = self._failure("Accelerometer exited before becoming ready")
+            error = self._failure("Accelerometer exited before becoming ready", range_hint=True)
             self.abort()
             raise error from exc
         except Exception:
@@ -241,6 +334,7 @@ class AccelerometerCapture:
                 raise self._failure("Accelerometer failed while saving samples")
             if self._output_error:
                 raise self._failure("Could not read accelerometer output")
+            self._range_metadata()
         except Exception:
             self.abort()
             raise

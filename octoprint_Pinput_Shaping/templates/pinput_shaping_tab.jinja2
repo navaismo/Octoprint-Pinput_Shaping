@@ -1,158 +1,179 @@
-<style>
-    #pinput_shaping_tab .pinput-actions { display: flex; flex-wrap: wrap; gap: 8px; margin: 12px 0; }
-    #pinput_shaping_tab .pinput-grid { display: inline-block; margin-right: 24px; vertical-align: middle; }
-    #pinput_shaping_tab .pinput-grid-row { display: flex; }
-    #pinput_shaping_tab .pinput-cell { width: 54px; height: 42px; margin: 2px; }
-    #pinput_shaping_tab .pinput-cell.selected { background: #1686bb; color: white; }
-    #pinput_shaping_tab .pinput-chart { min-height: 300px; }
-    #pinput_shaping_tab img { max-width: 100%; }
-    #pinput_shaping_tab .pinput-position { display: inline-block; vertical-align: middle; }
-</style>
-
-<div id="pinput_shaping_tab">
-    <h3>Input Shaping</h3>
-    <p>Calibrate one axis at a time. The printer profile supplies travel limits.
-        Secure the sensor, clear the bed and keep the stop control accessible.</p>
-
-    <div class="alert alert-info" aria-live="polite">
-        Input shaping: <strong data-bind="text: firmware().label"></strong>
-        (<span data-bind="text: firmware().state"></span>).
-        <span data-bind="text: firmware().message"></span>
-        <button class="btn btn-small" data-bind="click: detectFirmware, enable: available">Detect firmware</button>
-    </div>
-
-    <div class="alert alert-error" role="alert" data-bind="visible: error, text: error"></div>
-    <div class="alert alert-info" data-bind="visible: summary, text: summary"></div>
-    <div class="alert alert-warning" data-bind="visible: recoveryRequired">
-        A calibration was interrupted. Native motion may still be active; stop and settings must be verified before another test.
-        <button class="btn" data-bind="click: recover, enable: !busy() &amp;&amp; printerState.isOperational()">Restore saved settings</button>
-    </div>
-    <div class="alert alert-info" data-bind="visible: nativeSelected">
-        Native Marlin M495: <strong data-bind="text: nativeCapability().state"></strong>.
-        <span data-bind="text: nativeCapability().message"></span>
-        Configure and detect support in Settings before calibration. Marlin uses its internal test position;
-        the position grid applies to axis checks and software calibration.
-    </div>
-    <div data-bind="if: diagnostics() &amp;&amp; !result()">
-        <p>Native run diagnostics: <code data-bind="text: diagnostics().session_id"></code></p>
-        <p data-bind="foreach: Object.keys(diagnostics().files)">
-            <a data-bind="text: $data, attr: {href: $root.fileURL($data)}"></a> ·
-        </p>
-    </div>
-
-    <div class="pinput-actions">
-        <button class="btn" data-bind="click: prepareModes, enable: available">Prepare coordinate modes</button>
-        <button class="btn" data-bind="click: runAccTest, enable: available">Sensor values</button>
-        <button class="btn" data-bind="click: function () { runAxisTest('X'); }, enable: canMove">Test X axis</button>
-        <button class="btn" data-bind="click: function () { runAxisTest('Y'); }, enable: canMove">Test Y axis</button>
-        <button class="btn btn-warning" data-bind="click: cancel, enable: busy">Cancel test</button>
-        <button class="btn btn-danger" data-bind="click: emergencyStop, enable: printerState.isOperational">Stop printer (M112)</button>
-    </div>
-    <p data-bind="visible: !modesReady()">Prepare coordinate modes before commanding calibration motion.</p>
-    <p data-bind="visible: !firmwareReady()">Calibration and result application require a compatible detected firmware.</p>
-    <p aria-live="polite" data-bind="visible: busy">
-        Stage: <strong data-bind="text: stage"></strong>
-        <span data-bind="visible: progress"> — <span data-bind="text: progress"></span>%</span>
-        <span data-bind="text: progressSource"></span>.
-        Sensor: <span data-bind="text: sensorState"></span>
-    </p>
-
-    <table class="table table-condensed" data-bind="visible: samples().length">
-        <thead><tr><th>Time</th><th>X</th><th>Y</th><th>Z</th></tr></thead>
-        <tbody data-bind="foreach: samples">
-            <tr><td data-bind="text: time"></td><td data-bind="text: x"></td>
-                <td data-bind="text: y"></td><td data-bind="text: z"></td></tr>
-        </tbody>
-    </table>
-
-    <hr>
-    <h4>Calibration position</h4>
-    <div class="pinput-grid" data-bind="foreach: grid">
-        <div class="pinput-grid-row" data-bind="foreach: $data">
-            <button class="btn pinput-cell" data-bind="text: (row * 3 + col + 1),
-                css: {selected: $root.selectedCell().row === row &amp;&amp; $root.selectedCell().col === col},
-                enable: $root.available, click: function () { $root.selectedCell($data); },
-                attr: {'aria-label': 'Select row ' + (row + 1) + ', column ' + (col + 1)}"></button>
+<div id="pinput_shaping_tab" class="pinput-tab-container">
+    <header class="pinput-card pinput-header">
+        <div class="pinput-title-row">
+            <span class="pinput-app-icon" aria-hidden="true"><svg viewBox="0 0 32 32" width="32" height="32" fill="none" stroke="currentColor" stroke-width="2" stroke-linejoin="round" aria-hidden="true"><path d="M2 18h6l5-12 6 22 5-12h6"/></svg></span>
+            <div><h2>Input Shaping Calibration</h2><p>Measure mechanical resonance and configure input shaping for your printer.</p></div>
+            <nav class="pinput-view-nav" aria-label="Calibration views">
+                <button type="button" class="btn pinput-btn-subtle" data-bind="visible: view() === 'results' &amp;&amp; result(), click: showSetup"><i class="icon-arrow-left" aria-hidden="true"></i> Test setup</button>
+                <button type="button" class="btn pinput-btn-subtle" data-bind="visible: view() === 'setup' &amp;&amp; result(), click: showResults">View results <i class="icon-chevron-right" aria-hidden="true"></i></button>
+            </nav>
         </div>
-    </div>
-    <div class="pinput-position">
-        <label for="pinput-z">Z height (mm)</label>
-        <input id="pinput-z" type="number" min="10" step="1" class="input-small"
-            data-bind="value: selectedZ, attr: {max: sizeZ}, enable: available">
-        <p>X: <span data-bind="text: calculatedX"></span> mm,
-            Y: <span data-bind="text: calculatedY"></span> mm</p>
-    </div>
-    <div class="pinput-actions">
-        <button class="btn btn-primary" data-bind="click: function () { runResonance('X'); }, enable: canCalibrate">Calibrate X</button>
-        <button class="btn btn-primary" data-bind="click: function () { runResonance('Y'); }, enable: canCalibrate">Calibrate Y</button>
+        <div class="pinput-status-chips">
+            <span class="pinput-chip">Firmware: <strong data-bind="text: firmware().label"></strong></span>
+            <span class="pinput-chip">Native M495: <strong class="pinput-status-value" data-bind="text: nativeCapability().state, css: {'is-supported': nativeCapability().state === 'supported' &amp;&amp; nativeCapability().protocol === 2}"></strong></span>
+            <span class="pinput-chip">Sensor: <strong data-bind="text: sensorLabel"></strong></span>
+            <span class="pinput-chip">Backend: <strong data-bind="text: backendLabel"></strong></span>
+        </div>
+    </header>
+
+    <div class="pinput-notice pinput-notice-warning" data-bind="visible: recoveryRequired">
+        <i class="icon-warning-sign" aria-hidden="true"></i> A calibration was interrupted. Verify stop and settings before another test.
+        <button type="button" class="btn pinput-btn-subtle" data-bind="click: recover, enable: !busy() &amp;&amp; printerState.isOperational()">Restore saved settings</button>
     </div>
 
-    <div data-bind="visible: result">
-        <hr>
-        <h4>Measured result</h4>
-        <p data-bind="with: result">
-            Backend: <span data-bind="text: backend || 'software'"></span>.
-            Axis <strong data-bind="text: axis"></strong>:
-            resonance <strong data-bind="text: base_freq !== null ? base_freq.toFixed(1) : 'No confident candidate'"></strong> Hz.
-            Recommended <strong data-bind="text: best_shaper"></strong>
-            at <strong data-bind="text: best_shaper_freq !== null ? best_shaper_freq.toFixed(1) : 'Unavailable'"></strong> Hz.
-        </p>
-        <div data-bind="if: result() &amp;&amp; result().backend === 'marlin_m495'">
-            <div data-bind="with: result().quality">
-                <p data-bind="with: $data.alignment">
-                    Excitation interval estimated from the signal:
-                    <span data-bind="text: sensor_start.toFixed(2)"></span>–<span data-bind="text: sensor_end.toFixed(2)"></span> s;
-                    boundary uncertainty ±<span data-bind="text: uncertainty_seconds.toFixed(2)"></span> s.
-                </p>
-                <p>Supported fundamental coverage: <span data-bind="text: (coverage * 100).toFixed(1)"></span>%.</p>
-                <ul data-bind="foreach: $data.resonance_candidates || []">
-                    <li>Candidate resonance: <span data-bind="text: frequency.toFixed(1)"></span> ±
-                        <span data-bind="text: uncertainty_hz.toFixed(1)"></span> Hz;
-                        relative power <span data-bind="text: relative_power.toFixed(1)"></span>.</li>
-                </ul>
+
+    <div data-bind="visible: view() === 'setup' || !result()">
+        <section class="pinput-card" aria-labelledby="pinput-controls-title">
+            <h3 id="pinput-controls-title">Hardware &amp; Test Controls</h3>
+            <div class="pinput-toolbar">
+                <button type="button" class="btn btn-outline-primary btn-modern" data-bind="click: runAccTest, enable: available"><i class="icon-signal" aria-hidden="true"></i> Sensor Values</button>
+                <button type="button" class="btn btn-outline-primary btn-modern" data-bind="click: detectFirmware, enable: available"><i class="icon-cog" aria-hidden="true"></i> Detect Firmware</button>
+                <button type="button" class="btn btn-outline-primary btn-modern" data-bind="click: detectM495, enable: available"><i class="icon-tasks" aria-hidden="true"></i> Detect Native M495</button>
+                <button type="button" class="btn btn-outline-info btn-modern" data-bind="click: function () { runAxisTest('X'); }, enable: canMove"><i class="icon-play" aria-hidden="true"></i> Test X Axis</button>
+                <button type="button" class="btn btn-outline-info btn-modern" data-bind="click: function () { runAxisTest('Y'); }, enable: canMove"><i class="icon-play" aria-hidden="true"></i> Test Y Axis</button>
+                <button type="button" class="btn btn-outline-warning btn-modern" data-bind="click: cancel, enable: busy"><i class="icon-remove" aria-hidden="true"></i> Cancel Test</button>
+                <button type="button" class="btn btn-outline-danger btn-modern" data-bind="click: emergencyStop, enable: printerState.isOperational" title="Immediately request printer shutdown (M112)"><i class="icon-off" aria-hidden="true"></i> Emergency Stop</button>
+            </div>
+            <p class="pinput-help">Read sensor data, detect firmware capabilities, or run a bounded axis check. Emergency Stop sends M112.</p>
+            <p class="pinput-notice pinput-notice-info" data-bind="visible: !firmwareReady(), text: firmware().message"></p>
+            <p class="pinput-notice pinput-notice-info" data-bind="visible: nativeSelected() &amp;&amp; (nativeCapability().state !== 'supported' || nativeCapability().protocol !== 2), text: nativeCapability().message"></p>
+            <div class="pinput-scroll" data-bind="visible: samples().length">
+                <table class="table pinput-sensor-table"><caption>Latest sensor check · first five samples</caption>
+                    <thead><tr><th>Time</th><th>X</th><th>Y</th><th>Z</th></tr></thead>
+                    <tbody data-bind="foreach: samples().slice(0, 5)"><tr><td data-bind="text: time"></td><td data-bind="text: x"></td><td data-bind="text: y"></td><td data-bind="text: z"></td></tr></tbody>
+                </table>
+            </div>
+        </section>
+
+        <section class="pinput-card pinput-setup" aria-labelledby="pinput-setup-title">
+            <h3 id="pinput-setup-title">Calibration Setup</h3>
+            <p class="pinput-subtitle">Select a calibration position, then run the test on the desired axis. Test parameters are configured in plugin Settings.</p>
+            <div class="pinput-position-layout">
+                <div>
+                    <h4>Calibration Position</h4>
+                    <p class="pinput-help">XY test area: <span data-bind="text: sizeX"></span> × <span data-bind="text: sizeY"></span> mm.</p>
+                    <div class="grid-wrapper">
+                        <div class="y-axis-label">↑ Y (<span data-bind="text: sizeY"></span> mm)</div>
+                        <div class="grid-and-x-label">
+                            <div class="grid-xy" data-bind="foreach: grid">
+                                <div class="grid-row" data-bind="foreach: $data">
+                                    <button type="button" class="grid-cell" data-bind="text: row * 3 + col + 1, css: {selected: $root.selectedCell().row === row &amp;&amp; $root.selectedCell().col === col},
+                                        enable: $root.available() &amp;&amp; !$root.nativeSelected(), click: function () { $root.selectedCell($data); },
+                                        attr: {'aria-label': 'Cell ' + (row * 3 + col + 1) + ', row ' + (row + 1) + ', column ' + (col + 1), 'aria-pressed': $root.selectedCell().row === row &amp;&amp; $root.selectedCell().col === col}"></button>
+                                </div>
+                            </div>
+                            <div class="x-axis-label">→ X (<span data-bind="text: sizeX"></span> mm)</div>
+                        </div>
+                    </div>
+                </div>
+                <div class="z-slider-container">
+                    <label for="pinput-z">Z Height (mm)</label>
+                    <input id="pinput-z" class="z-slider" type="range" min="10" step="1" data-bind="value: selectedZ, valueUpdate: 'input', attr: {max: sizeZ}, enable: available() &amp;&amp; !nativeSelected()">
+                    <div class="position-output" data-bind="text: nativeSelected() ? 'Z set by Marlin' : 'Z: ' + selectedZ() + ' mm'"></div>
+                </div>
+                <div class="pinput-position-note">
+                    <div data-bind="visible: nativeSelected"><i class="icon-info-sign" aria-hidden="true"></i><h4>Position controlled by Marlin</h4><p>In native mode, M495 performs homing and uses the firmware's XY position and Z height. These controls are disabled.</p></div>
+                    <div data-bind="visible: !nativeSelected()"><h4>Selected start position</h4><p class="pinput-coordinate-readout">X <strong data-bind="text: calculatedX"></strong> · Y <strong data-bind="text: calculatedY"></strong> · Z <strong data-bind="text: selectedZ"></strong> mm</p><p>The software test uses this position within the active printer profile's travel limits.</p></div>
+                </div>
+            </div>
+            <div class="pinput-setup-footer">
+                <p class="pinput-help"><i class="icon-info-sign" aria-hidden="true"></i> Secure the sensor and clear the travel area before starting.</p>
+                <div class="pinput-calibrate-buttons">
+                    <button type="button" class="btn btn-outline-success btn-modern" data-bind="click: function () { runResonance('X'); }, enable: canCalibrate"><i class="icon-play" aria-hidden="true"></i> Calibrate X</button>
+                    <button type="button" class="btn btn-outline-success btn-modern" data-bind="click: function () { runResonance('Y'); }, enable: canCalibrate"><i class="icon-play" aria-hidden="true"></i> Calibrate Y</button>
+                </div>
+            </div>
+            <p class="pinput-notice pinput-notice-warning" data-bind="visible: nativeValidation, text: nativeValidation"></p>
+        </section>
+
+        <section class="pinput-card pinput-progress-card" aria-labelledby="pinput-progress-title" aria-live="polite">
+            <h3 id="pinput-progress-title">Test Progress</h3>
+            <div class="pinput-progress-content">
+                <div class="pinput-progress-heading" data-bind="css: {'is-failed': !!error()}"><span class="pinput-run-indicator" data-bind="css: {'is-running': busy() &amp;&amp; !error(), 'is-failed': !!error()}"></span><strong data-bind="text: busy() ? stage() : (error() ? 'Operation interrupted' : 'Ready for calibration')"></strong><strong data-bind="visible: busy() &amp;&amp; progress(), text: progress() + '%'"></strong></div>
+                <div class="pinput-progress-track" role="progressbar" aria-label="Test progress" aria-valuemin="0" aria-valuemax="100" data-bind="attr: {'aria-valuenow': progress()}, css: {'is-indeterminate': busy() &amp;&amp; !progress()}"><span data-bind="style: {width: progress() + '%'}"></span></div>
+                <p class="pinput-help"><span data-bind="text: progressSource"></span><span data-bind="visible: sensorState"> · Sensor: <strong class="pinput-sensor-state" data-bind="text: sensorState"></strong></span></p>
+                <ol class="pinput-stepper" data-bind="visible: operation() === 'run_resonance_test', foreach: progressSteps"><li data-bind="css: {'is-done': done, 'is-current': current, 'is-failed': failed}"><span class="pinput-step-dot" aria-hidden="true" data-bind="text: done ? '✓' : ''"></span><strong data-bind="text: label"></strong><small data-bind="text: status"></small></li></ol>
+            </div>
+        </section>
+
+        <div class="pinput-last-error" data-bind="visible: error() &amp;&amp; !errorToastOpen()">
+            <i class="icon-warning-sign" aria-hidden="true"></i> The last operation reported an error.
+            <button type="button" class="pinput-text-button" data-bind="click: openError">View details</button>
+        </div>
+        <div class="pinput-notice pinput-notice-info pinput-operation-status" role="status" data-bind="visible: summary, text: summary"></div>
+
+        <section class="pinput-card pinput-run-diagnostics" data-bind="visible: diagnostics() &amp;&amp; !result(), if: diagnostics() &amp;&amp; !result()">
+            <h3>Run diagnostics</h3><p>Session: <code class="pinput-session-id" data-bind="text: diagnostics().session_id"></code></p>
+            <div class="pinput-downloads" data-bind="foreach: Object.keys(diagnostics().files)"><a data-bind="text: $data, attr: {href: $root.fileURL($data)}"></a></div>
+        </section>
+    </div>
+
+    <div data-bind="visible: view() === 'results' &amp;&amp; result()">
+        <section class="pinput-card pinput-result-summary" data-bind="with: result, css: {'is-diagnostic': result() &amp;&amp; result().recommendation_valid === false}">
+            <div class="pinput-result-heading"><div><h2><span data-bind="text: axis"></span> Axis Results</h2><span class="pinput-result-state" data-bind="text: $data.recommendation_valid === false ? 'Diagnostics only' : 'Analysis complete', css: {'is-diagnostic': $data.recommendation_valid === false}"></span></div></div>
+            <div class="pinput-result-metric"><span>Measured resonance</span><strong data-bind="text: $root.number(base_freq) + ' Hz'"></strong></div>
+            <div class="pinput-result-metric pinput-recommendation"><span>Recommended shaper</span><strong data-bind="text: best_shaper ? best_shaper + ' @ ' + $root.number(best_shaper_freq) + ' Hz' : 'No confident recommendation'"></strong></div>
+            <div class="pinput-result-facts"><span class="pinput-chip">Backend: <strong data-bind="text: $root.resultBackend"></strong></span><span class="pinput-chip">Sample rate: <strong data-bind="text: $root.number($root.qualityInfo().sampling_rate) + ' Hz'"></strong></span><span class="pinput-chip">Selected accel limit: <strong data-bind="text: $root.selectedCandidate() ? $root.number($root.selectedCandidate().suggested_accel, 0) + ' mm/s²' : '—'"></strong></span><span class="pinput-chip">Sensor range: <strong data-bind="text: $root.resultRange"></strong></span></div>
+        </section>
+
+        <div class="pinput-results-layout">
+            <section class="pinput-card pinput-quality" aria-labelledby="pinput-quality-title">
+                <h3 id="pinput-quality-title">Measurement Quality</h3><p class="pinput-subtitle">Evaluate the measurement and detected resonances.</p>
+                <div class="pinput-quality-summary" data-bind="with: result, css: {'is-diagnostic': result() &amp;&amp; result().recommendation_valid === false}">
+                    <div><strong data-bind="text: $data.recommendation_valid === false ? 'Recommendation unavailable' : 'Analysis checks passed'"></strong><p data-bind="visible: Number.isFinite($root.qualityInfo().coverage)">Supported fundamental coverage: <span data-bind="text: $root.number($root.qualityInfo().coverage * 100)"></span>%</p><p data-bind="visible: !Number.isFinite($root.qualityInfo().coverage)">Review the measured spectrum and quality diagnostics.</p></div>
+                    <div data-bind="with: $root.qualityInfo().alignment"><span>Excitation interval</span><strong data-bind="text: $root.number(sensor_start, 2) + '–' + $root.number(sensor_end, 2) + ' s'"></strong><span>Boundary uncertainty</span><strong data-bind="text: '±' + $root.number(uncertainty_seconds, 2) + ' s'"></strong></div>
+                </div>
+                <div class="pinput-resonances" data-bind="foreach: qualityInfo().resonance_candidates || []"><span class="pinput-chip" data-bind="text: $root.number(frequency) + ' ±' + $root.number(uncertainty_hz) + ' Hz · power ' + $root.number(relative_power)"></span></div>
+                <div class="pinput-scroll"><table class="table pinput-results-table"><thead><tr><th>Shaper</th><th>Frequency<br>(Hz)</th><th>Predicted<br>residual</th><th>Duration<br>(ms)</th><th>Theoretical accel limit<br>(mm/s²)</th><th>Recommended</th></tr></thead>
+                    <tbody data-bind="foreach: shapers"><tr data-bind="css: {'is-recommended': best, 'is-selected': name === $root.selectedShaper()}"><td><button type="button" class="pinput-table-choice" data-bind="text: name, click: function () { $root.selectShaper(name); }, enable: $root.canSelectShaper, attr: {'aria-pressed': name === $root.selectedShaper()}"></button></td><td data-bind="text: frequency"></td><td data-bind="text: vibration"></td><td data-bind="text: duration"></td><td data-bind="text: acceleration"></td><td class="pinput-recommended" data-bind="text: best ? '✓' : '', attr: {'aria-label': best ? 'Recommended' : ''}"></td></tr></tbody>
+                </table></div>
+                <div class="pinput-notice pinput-notice-warning" data-bind="visible: result() &amp;&amp; result().warnings &amp;&amp; result().warnings.length, with: result"><ul data-bind="foreach: warnings"><li data-bind="text: $data"></li></ul></div>
+            </section>
+
+            <div class="pinput-results-side">
+                <section class="pinput-card pinput-apply" aria-labelledby="pinput-apply-title" data-bind="css: {'is-diagnostic': result() &amp;&amp; result().recommendation_valid === false}">
+                    <h3 id="pinput-apply-title">Apply Measured Settings</h3><p class="pinput-subtitle">Apply a fitted input shaper to the tested axis.</p>
+                    <label for="pinput-shaper">Shaper</label><div class="pinput-shaper-select"><select id="pinput-shaper" data-bind="options: shaperChoices, optionsText: 'label', optionsValue: 'name', value: selectedShaper, valueAllowUnset: true, enable: canSelectShaper"></select><button type="button" class="btn pinput-btn-subtle" data-bind="click: useRecommendation, enable: canSelectShaper">Use Recommendation</button></div>
+                    <p class="pinput-help">FTM allows any fitted shaper from this measurement, using its saved frequency and damping. Legacy firmware supports ZV only.</p>
+                    <pre class="pinput-command"><code data-bind="text: selectedCommand() || 'No applicable shaper selected'"></code></pre>
+                    <button type="button" class="btn btn-outline-success btn-modern pinput-apply-button" data-bind="click: applyResult, enable: canApply, text: applyLabel"></button>
+                    <p class="pinput-help"><i class="icon-info-sign" aria-hidden="true"></i> Applied to the tested axis in RAM. Validate with a print before saving to EEPROM.</p>
+                    <div class="pinput-notice pinput-notice-info pinput-operation-status" role="status" data-bind="visible: summary, text: summary"></div>
+
+                    <div class="pinput-last-error" data-bind="visible: error() &amp;&amp; !errorToastOpen()">
+                        <i class="icon-warning-sign" aria-hidden="true"></i> The last operation reported an error.
+                        <button type="button" class="pinput-text-button" data-bind="click: openError">View details</button>
+                    </div>
+                </section>
+                <section class="pinput-card pinput-events" data-bind="visible: result() &amp;&amp; result().backend === 'marlin_m495'">
+                    <h3>Protocol Events &amp; Diagnostics</h3><p class="pinput-subtitle">Received firmware events, relative to the first event.</p>
+                    <p data-bind="visible: protocolLoading">Loading protocol events…</p>
+                    <ol class="pinput-event-list" data-bind="foreach: protocolEvents"><li data-bind="css: {'is-failed': failed}"><i data-bind="css: failed ? 'icon-warning-sign' : 'icon-ok-sign'" aria-hidden="true"></i><time data-bind="text: elapsed + ' s'"></time><div><strong data-bind="text: kind"></strong><span data-bind="text: description"></span></div></li></ol>
+                    <p class="pinput-help" data-bind="visible: !protocolLoading() &amp;&amp; !protocolEvents().length">Open the protocol events download for the complete event record.</p>
+                    <a data-bind="attr: {href: fileURL('events')}">Download protocol events</a>
+                </section>
             </div>
         </div>
-        <table class="table table-striped">
-            <thead><tr><th>Shaper</th><th>Frequency (Hz)</th><th>Predicted residual</th>
-                <th>Duration (ms)</th><th>Theoretical accel limit (mm/s²)</th><th>Recommended</th></tr></thead>
-            <tbody data-bind="foreach: shapers">
-                <tr><td data-bind="text: name"></td><td data-bind="text: frequency"></td>
-                    <td data-bind="text: vibration"></td><td data-bind="text: duration"></td>
-                    <td data-bind="text: acceleration"></td><td data-bind="text: best ? 'Yes' : ''"></td></tr>
-            </tbody>
-        </table>
-        <div class="alert alert-warning" data-bind="with: result">
-            <ul data-bind="foreach: warnings"><li data-bind="text: $data"></li></ul>
-        </div>
-        <label for="pinput-shaper">Shaper to apply</label>
-        <select id="pinput-shaper" data-bind="options: shaperChoices, optionsText: 'label', optionsValue: 'name',
-            value: selectedShaper, valueAllowUnset: true, enable: canSelectShaper"></select>
-        <button class="btn btn-small" data-bind="click: useRecommendation, enable: canSelectShaper">Use recommendation</button>
-        <p>FTM allows any fitted shaper from this measurement. Each choice uses its saved frequency and damping.
-            Legacy firmware supports ZV only.</p>
-        <p><code data-bind="text: selectedCommand"></code></p>
-        <button class="btn btn-success" data-bind="click: applyResult, enable: canApply, text: applyLabel"></button>
-        <p>Settings are applied to the tested axis in RAM. Validate with a print before saving them to EEPROM.</p>
-        <p><a data-bind="attr: {href: fileURL('csv')}">Download raw CSV</a></p>
-        <p data-bind="visible: result() &amp;&amp; result().backend === 'marlin_m495'">
-            <a data-bind="attr: {href: fileURL('events')}">Protocol events</a> ·
-            <a data-bind="attr: {href: fileURL('excitation')}">Excitation and cleanup</a> ·
-            <a data-bind="attr: {href: fileURL('analysis')}">Analysis diagnostics</a> ·
-            <a data-bind="attr: {href: fileURL('metadata')}">Sensor metadata</a> ·
-            <a data-bind="attr: {href: fileURL('sensor_log')}">Sensor log</a>
-        </p>
 
-        <div id="pinput_signal" class="pinput-chart" data-bind="visible: interactiveAvailable"></div>
-        <div id="pinput_psd" class="pinput-chart" data-bind="visible: interactiveAvailable"></div>
-        <h5>Signal and predicted spectra</h5>
-        <a target="_blank" rel="noopener" data-bind="attr: {href: fileURL('signal')}">
-            <img alt="Captured acceleration signal" data-bind="attr: {src: fileURL('signal')}">
-        </a>
-        <a target="_blank" rel="noopener" data-bind="attr: {href: fileURL('psd')}">
-            <img alt="Measured spectrum and predicted shaper responses" data-bind="attr: {src: fileURL('psd')}">
-        </a>
+        <section id="pinput-analysis" class="pinput-card pinput-analysis" aria-labelledby="pinput-analysis-title">
+            <div class="pinput-analysis-heading"><div><h3 id="pinput-analysis-title">Signal &amp; Frequency Analysis</h3><p class="pinput-subtitle">Measured signal, frequency response, and analysis diagnostics.</p></div><div class="pinput-analysis-actions"><button type="button" class="btn pinput-btn-subtle" data-bind="click: toggleFullscreen, visible: fullscreenAvailable"><i class="icon-resize-full" aria-hidden="true"></i> Full Screen</button><a class="btn pinput-btn-subtle" data-bind="attr: {href: fileURL('csv')}"><i class="icon-download-alt" aria-hidden="true"></i> Download CSV</a></div></div>
+            <div class="pinput-chart-tabs" role="tablist" aria-label="Analysis views" data-bind="event: {keydown: chartTabKey}">
+                <button id="pinput-tab-overview" type="button" role="tab" aria-controls="pinput-charts" data-bind="css: {active: chartTab() === 'overview'}, attr: {'aria-selected': chartTab() === 'overview', tabindex: chartTab() === 'overview' ? 0 : -1}, click: function () { selectChartTab('overview'); }">Overview</button>
+                <button id="pinput-tab-signal" type="button" role="tab" aria-controls="pinput-charts" data-bind="css: {active: chartTab() === 'signal'}, attr: {'aria-selected': chartTab() === 'signal', tabindex: chartTab() === 'signal' ? 0 : -1}, click: function () { selectChartTab('signal'); }">Time Signal</button>
+                <button id="pinput-tab-frequency" type="button" role="tab" aria-controls="pinput-charts" data-bind="css: {active: chartTab() === 'frequency'}, attr: {'aria-selected': chartTab() === 'frequency', tabindex: chartTab() === 'frequency' ? 0 : -1}, click: function () { selectChartTab('frequency'); }">Frequency Response</button>
+                <button id="pinput-tab-diagnostics" type="button" role="tab" aria-controls="pinput-analysis-diagnostics" data-bind="css: {active: chartTab() === 'diagnostics'}, attr: {'aria-selected': chartTab() === 'diagnostics', tabindex: chartTab() === 'diagnostics' ? 0 : -1}, click: function () { selectChartTab('diagnostics'); }">Diagnostics</button>
+            </div>
+            <div id="pinput-charts" class="pinput-chart-grid" role="tabpanel" data-bind="visible: chartTab() !== 'diagnostics', css: {'is-single': chartTab() !== 'overview'}, attr: {'aria-labelledby': 'pinput-tab-' + chartTab()}">
+                <div class="pinput-chart-panel" data-bind="visible: chartTab() === 'overview' || chartTab() === 'signal'"><h4>Time Signal <span data-bind="text: result() ? '(' + result().axis + ' Axis)' : ''"></span><a target="_blank" rel="noopener" data-bind="attr: {href: fileURL('signal')}">PNG ↗</a></h4><div id="pinput_signal" class="pinput-chart" data-bind="visible: interactiveAvailable"></div><div class="pinput-plot-fallback" data-bind="visible: !interactiveAvailable(), if: result"><a target="_blank" rel="noopener" data-bind="attr: {href: fileURL('signal')}"><img alt="Captured acceleration signal" data-bind="attr: {src: fileURL('signal')}"></a></div></div>
+                <div class="pinput-chart-panel" data-bind="visible: chartTab() === 'overview' || chartTab() === 'frequency'"><h4>Frequency Response <span data-bind="text: result() ? '(' + result().axis + ' Axis)' : ''"></span><a target="_blank" rel="noopener" data-bind="attr: {href: fileURL('psd')}">PNG ↗</a></h4><div id="pinput_psd" class="pinput-chart" data-bind="visible: interactiveAvailable"></div><div class="pinput-plot-fallback" data-bind="visible: !interactiveAvailable(), if: result"><a target="_blank" rel="noopener" data-bind="attr: {href: fileURL('psd')}"><img alt="Measured spectrum and predicted shaper responses" data-bind="attr: {src: fileURL('psd')}"></a></div></div>
+            </div>
+            <div id="pinput-analysis-diagnostics" role="tabpanel" aria-labelledby="pinput-tab-diagnostics" data-bind="visible: chartTab() === 'diagnostics'"><div class="pinput-downloads"><a data-bind="attr: {href: fileURL('csv')}">Raw CSV</a><span data-bind="visible: result() &amp;&amp; result().backend === 'marlin_m495'"><a data-bind="attr: {href: fileURL('excitation')}">Excitation &amp; cleanup</a><a data-bind="attr: {href: fileURL('analysis')}">Analysis diagnostics</a><a data-bind="attr: {href: fileURL('metadata')}">Sensor metadata</a><a data-bind="attr: {href: fileURL('sensor_log')}">Sensor log</a></span></div><h4>Measurement quality</h4><pre class="pinput-quality-json" data-bind="text: qualityJSON"></pre><p class="pinput-help">Host event times and sensor sample times use independent clocks.</p></div>
+        </section>
     </div>
+
+    <aside class="pinput-error-toast" role="alert" aria-live="assertive" aria-atomic="true" data-bind="visible: errorToastOpen() &amp;&amp; error()">
+        <i class="icon-warning-sign" aria-hidden="true"></i><div><strong>Action failed</strong><p data-bind="text: error"></p></div><button type="button" aria-label="Dismiss error" title="Dismiss error" data-bind="click: dismissError">×</button>
+    </aside>
 </div>
 <!-- Interactive charts are optional; PNG plots and result application work offline. -->
-<script src="https://cdn.plot.ly/plotly-3.0.1.min.js" charset="utf-8" async
-    onload="window.dispatchEvent(new Event('pinputPlotlyReady'))"></script>
+<script src="https://cdn.plot.ly/plotly-3.0.1.min.js" charset="utf-8" async onload="window.dispatchEvent(new Event('pinputPlotlyReady'))"></script>

@@ -1,75 +1,59 @@
 # OctoPrint-PInput-Shaping
 
-![Build](https://img.shields.io/badge/status-under_review-orange?style=flat-square)
 ![Python](https://img.shields.io/badge/python-3.9_to_3.12-blue?style=flat-square)
 ![OctoPrint](https://img.shields.io/badge/OctoPrint-Compatible-orange?style=flat-square)
 
-**Pinput Shaping** is a responsive plugin for OctoPrint that enables  **Input Shaping** workflows for Marlin firmware users.
+**Pinput Shaping** lets you run input shaping tests from OctoPrint with an
+ADXL345 or LIS2DW accelerometer. Test X and Y, compare the shapers and apply
+the result to Marlin from the same tab.
 
-It runs resonance tests, validates acceleration captures, fits firmware-compatible shapers and verifies their application through OctoPrint.
+I use **Native Marlin M495** with my
+[`c13_octoprint` branch](https://github.com/navaismo/Marlin_bugfix_2.1_E3V3SE/tree/c13_octoprint).
+Marlin handles the movement; the plugin records the sensor, analyzes the
+measurement and shows the shaper settings. The software-generated test is
+still available for builds without the native integration.
 
-> The `plugin_optimization` branch contains reliability changes under review. Read the [firmware and installation contract](docs/firmware-contract.md) before physical testing. It targets c13 FTM v2 (`M493`) and retains legacy ZV (`M593`) support. Physical validation is still required.
+![Input Shaping test setup](assets/ui-test-setup.png)
 
-<br>
-<div align="center">
-   <img src="https://i.imgur.com/l2Y03AS.png" width="60%" height="60%"/>      
-</div>
-<br>
+The screenshots show the current UI with sample data.
 
----
-
-## 📚 Table of Contents
+## Table of Contents
 
 - [Features](#features)
 - [Shaper Algorithms Supported](#shaper-algorithms-supported)
+- [Accelerometers](#accelerometers)
 - [Hardware Setup](#hardware-setup)
-- [Dependencies Installation](#automatic-dependencies-installation)
+  - [ADXL345 SPI](#adxl345-spi)
+  - [ADXL345 USB](#btt-adxl345-usb-mellow-fly-adxl345usband-maybe-others-adxl-based-rpi2040)
+  - [LIS2DW USB](#btt-lis2dw-usb)
+- [Dependencies Installation](#dependencies-installation)
 - [Marlin Setup](#marlin-setup)
 - [Plugin Installation](#plugin-installation)
-- [Plugin Configuration](#plugin-configuration)
-- [Plugin Usage](#plugin-usage)
-  - [Hardware Checks](#hardware-checks)
-  - [Running Input Shaping Tests](#running-input-shaping-tests)
-  - [Results](#results)
-
----
-
+- [Settings](#settings)
+- [Using the Plugin](#using-the-plugin)
+- [Results](#results)
+- [Errors and Logs](#errors-and-logs)
+- [M495 Communication](#m495-communication)
+- [Development](#development)
+- [License](#license)
+- [Disclaimer](#disclaimer)
 
 ## Acknowledgments
 
-- Thanks to [lsellens](https://github.com/lsellens) for the contributions of general clean up, improving and testing the plugin.
+- Thanks to [lsellens](https://github.com/lsellens) for the cleanup, improvements and testing.
 - Based on [`adxl345spi`](https://github.com/nagimov/adxl345spi) by [@nagimov](https://github.com/nagimov).
-- Thansk to [@thosoo](https://github.com/thosoo/) for ceating the Firmware for the RPI2040 and the wrapper to work with the varianst of the USB ADXL345. 
+- Thanks to [@thosoo](https://github.com/thosoo/) for the RP2040 firmware and USB ADXL345 wrapper.
 - Inspired by Klipper's input shaping approach.
-
----
-
 
 ## Features
 
-- 🧪 **Automated Resonance Testing**
-  - Run ADXL345 or LIS2DW tests for X and Y axes.
-  - Select software excitation or native Marlin M495 with manually detected PIS:RT v2 host-arming support.
-  - 3×3 XY grid + Z selector for software calibration and axis checks.
-
-- 📊 **Built-in Data Analysis**
-  - Welch PSD for software tests; frequency-aware fundamental response for native sweeps.
-  - Fits eight c13 FTM shapers, including ZV, ZVD, MZV and the EI family.
-  - Rejects invalid clocks, weak resonance measurements and distorted sweep timing.
-
-- 🎨 **Interactive Graphs**
-  - Filtered Signal + PSD overlaid with shaper responses.
-  - Full-screen zoom, download, and modal viewer.
-
-- 🔧 **Marlin Command Generator**
-  - Generates axis-specific `M493` commands for c13 FTM v2, or `M593` for legacy ZV.
-  - Applies complete results through backend validation and firmware readback.
-
-- 💻 **Modern UI**
-  - Theme-compatible Bootstrap controls
-  - Explicit calibration stages, progress and recovery status
-
----
+- Native Marlin M495 tests for X and Y, with sensor capture synchronized after homing.
+- ADXL345 SPI, ADXL345 USB and LIS2DW USB support.
+- Sensor rate, channels and USB port in Settings; selectable LIS2DW range.
+- A numbered XY grid and Z height for software tests. Native tests use Marlin's position.
+- Signal and frequency graphs, shaper comparison and downloadable measurements.
+- Apply and read back the selected shaper with `M493`, or ZV with legacy `M593`.
+- Progress stages, error details and logs for each test.
 
 ## Shaper Algorithms Supported
 
@@ -84,11 +68,12 @@ It runs resonance tests, validates acceleration captures, fits firmware-compatib
 | 2HUMP_EI    | 4-Impulse EI           |
 | 3HUMP_EI    | 5-Impulse EI           |
 
-Candidates share a validated reference spectrum and are ranked by predicted residual vibration and smoothing displacement. Native mode uses relative fundamental sensitivity within the measured band. Acceleration limits are theoretical estimates capped by the configured ceiling, not measured mechanical capabilities.
+The eight shapers are available with the reviewed c13 FTM configuration.
+Legacy `M593` builds can apply ZV. Suggested acceleration limits are smoothing
+estimates; check the result with a print before saving it.
 
----
+## Accelerometers
 
-## Accelerometer Supported
 | Brand       | Model                  |
 |-------------|------------------------|
 | Creality    | [ADXL345 SPI](https://es.aliexpress.com/item/1005007493583778.html)            |
@@ -96,7 +81,9 @@ Candidates share a validated reference spectrum and are ranked by predicted resi
 | BigTreeTech | [BTT-S2DW](https://es.aliexpress.com/item/1005007518562508.html)      |
 | Mellow Fly  | [Fly-ADXL345](https://es.aliexpress.com/item/1005008779305652.html)           |
 
-<br><br>
+Use the firmware and wrapper for your board. Klipper sensor firmware does
+not speak the same protocol as these wrappers.
+
 # Hardware Setup
 
 ## ADXL345-SPI
@@ -126,7 +113,7 @@ Source: https://www.reddit.com/r/klippers/comments/1e5ocz5/guide_hooking_up_your
 
 3.- Build a cable to connect the sensor into the Raspberry Pi. In my case i cut in the half and solder the cables to Dupont jumpers to connect it into the board.
 
-4.- The jumpers tha I used are 40cm long so I needed to attach another jumpers to make the cable longer and used a case to hold the jumpers to avoid disconnections, so at the end I have a cable around 90cm long make sure you make yours long enough to move safely with your printer..
+4.- The jumpers that I used are 40cm long so I needed to attach another jumpers to make the cable longer and used a case to hold the jumpers to avoid disconnections, so at the end I have a cable around 90cm long make sure you make yours long enough to move safely with your printer..
 
 <div align="center">
 <a href=""><img src="https://i.imgur.com/iH7OwVs.jpeg" align="center" height="500" width="650" ></a>
@@ -137,13 +124,13 @@ Source: https://www.reddit.com/r/klippers/comments/1e5ocz5/guide_hooking_up_your
 </div>
 
 
-5.- Connect the Sensor to the Raspberri Pi following the Diagram below:
+5.- Connect the Sensor to the Raspberry Pi following the Diagram below:
 <div align="center">
 <a href=""><img src="https://i.imgur.com/bEIpB2E.png" align="center"  ></a>
 </div>
 
 <br>
-6.- To Hold the sensor into the Head and Bed you can use your preffered 3D Models, for my Ender 3 V3 SE I use these models:
+6.- To Hold the sensor into the Head and Bed you can use your preferred 3D Models, for my Ender 3 V3 SE I use these models:
 
 * Head Bracket: https://www.printables.com/model/919687-g-sensor-bracket-for-ender3-v3-se/files
 
@@ -199,7 +186,7 @@ SSH into your Raspberry Pi save and run the script `Octo-deps-install-ADXLSPI.sh
 sudo bash bash/Octo-deps-install-ADXLSPI.sh
 ```
 
-Veryfy that yo can read values from the Sensor
+Verify that you can read values from the Sensor
 ```bash
 sudo adxl345spi -f 5
 ```
@@ -218,17 +205,17 @@ time = 0.801, x = -0.070, y = 0.094, z = 1.023
 
 ## BTT-ADXL345-USB, Mellow Fly-ADXL345USB(and maybe others ADXL based RPi2040)
 
-Thanks to user [@thosoo](https://github.com/thosoo/) for ceating the Firmware for the RPI2040 and the wrapper to work with the varianst of the USB ADXL345 connected to a RPi2040.
+Thanks to user [@thosoo](https://github.com/thosoo/) for creating the Firmware for the RPI2040 and the wrapper to work with the variants of the USB ADXL345 connected to a RPi2040.
 You can download [from his repo](https://github.com/thosoo/adxl345usb), or from the folder `FW_RPi2040` the uf2 file and do the following to install into your Device:
 
   - Hold the `BOOT` button from the board.
   - Connect the Board to your machine while keeping pressing the `BOOT` button.
   - Wait for your computer to show the new Storage Device and release the button.
   - Mount and Open the Device.
-  - Copy the Downloaded `Firmware.uf2` file (Or your complied version `Firmware.uf2`) to the Device.
+  - Copy the Downloaded `Firmware.uf2` file (Or your compiled version `Firmware.uf2`) to the Device.
   - When it finish the copy the device will unmount automatically, means the RPi2040 is rebooting.
   - Disconnect the Device from your computer.
-  - Connect the device to your Raspberry Pi Running Octoprint(or the device running Octorpint).
+  - Connect the device to your Raspberry Pi Running Octoprint(or the device running OctoPrint).
 
 ### Wrapper Automatic Dependencies installation
 SSH into your Raspberry Pi save and run the script `Octo-deps-install-ADXLUSB.sh` located in the bash folder:
@@ -237,7 +224,7 @@ SSH into your Raspberry Pi save and run the script `Octo-deps-install-ADXLUSB.sh
 sudo bash bash/Octo-deps-install-ADXLUSB.sh
 ```
 
-Veryfy that yo can read values from the Sensor
+Verify that you can read values from the Sensor
 ```bash
 adxl345usb -f 5 -p /dev/ttyACM1
 ```
@@ -256,7 +243,7 @@ time = 0.801, x = -0.070, y = 0.094, z = 1.023
 
 ## BTT-LIS2DW-USB
 
-To Hold the sensor into the Head and Bed you can use your preffered 3D Models, for my Ender 3 V3 SE I use these models:
+To Hold the sensor into the Head and Bed you can use your preferred 3D Models, for my Ender 3 V3 SE I use these models:
 
 * Modified LIS2DW Case: https://www.printables.com/model/1049353-btt-s2dwadxl345-case/files
 
@@ -288,209 +275,336 @@ Place in the Bed.
 
 <br>
 
-You can download from my [LIS2DWUSB repo](https://github.com/navaismo/lis2dwusb), or from the folder `FW_RPi2040` the uf2 file and do the following to install into your Device:
+Use the current **main** branch of my
+[LIS2DWUSB repo](https://github.com/navaismo/lis2dwusb). It includes protocol 2,
+device timestamps and selectable ±2/4/8/16 g ranges. Update **both** the
+RP2040 firmware and the wrapper on your Raspberry Pi.
 
-  - Hold the `BOOT` button from the board.
-  - Connect the Board to your machine while keeping pressing the `BOOT` button.
-  - Wait for your computer to show the new Storage Device and release the button.
-  - Mount and Open the Device.
-  - Copy the Downloaded `Firmware.uf2` file (Or your complied version `Firmware.uf2`) to the Device.
-  - When it finish the copy the device will unmount automatically, means the RPi2040 is rebooting.
-  - Disconnect the Device from your computer.
-  - Connect the device to your Raspberry Pi Running Octoprint(or the device running Octorpint).
+### Build and copy the sensor firmware
 
-### Wrapper Automatic Dependencies installation
-SSH into your Raspberry Pi save and run the script `Octo-deps-install-LIS2DW.sh` located in the bash folder:
+With PlatformIO installed, run:
 
 ```bash
-sudo bash bash/Octo-deps-install-LIS2DW.sh
+git clone --branch main https://github.com/navaismo/lis2dwusb.git
+cd lis2dwusb
+git checkout --detach cc660288df4aed9c7106623c12f2587ed6314a65
+pio run -e btt_lis2dw
 ```
 
-Veryfy that yo can read values from the Sensor
+That is the main-branch revision used by this plugin's installer. The UF2 is
+generated at `.pio/build/btt_lis2dw/firmware.uf2`. Use this newly built file;
+the old copy in this plugin's `FW_RPi2040` folder is not the updated firmware.
+
+1. Hold the sensor's **BOOT** button while connecting it to your computer.
+2. Release BOOT when the RP2040 storage device appears.
+3. Copy the generated `firmware.uf2` onto that device. It disconnects when the board restarts.
+4. Connect the sensor to the Raspberry Pi running OctoPrint.
+
+Building the UF2 does not copy it to the sensor. One firmware image supports
+all four ranges; choose the range later in the plugin's Settings.
+
+### Install or update the wrapper
+
+On the Raspberry Pi, run the LIS2DW installer from this plugin's checkout:
+
 ```bash
-sudo lis2dwusb -f 200
+sudo OCTOPRINT_USER=pi bash bash/Octo-deps-install-LIS2DW.sh
 ```
-Output:
+
+Replace `pi` with the account running OctoPrint. The installer downloads the
+new main-branch revision, compiles the wrapper on the Pi and installs it in
+`/usr/local/bin`. It does not flash the sensor. Restart OctoPrint afterward
+so it picks up the `dialout` group membership.
+
+If you already have the updated sensor repository on the Pi, you can use:
+
 ```bash
-Press Q to stop
-time = 0.001, x = -0.029, y = -0.167, z = 1.073
-time = 0.004, x = -0.034, y = -0.166, z = 1.064
-time = 0.009, x = -0.030, y = -0.165, z = 1.069
-...
-time = 0.215, x = -0.029, y = -0.174, z = 1.068
-time = 0.219, x = -0.031, y = -0.162, z = 1.051
-time = 0.224, x = -0.032, y = -0.166, z = 1.025
-time = 0.229, x = -0.029, y = -0.167, z = 1.029
-Captured 47 samples in 0.23 s = 204.8 Hz
+make -C Linux_Wrapper
+sudo make -C Linux_Wrapper install
+/usr/local/bin/lis2dwusb -h
 ```
 
-<br><br>
+Run those commands from the sensor repository root, with its `include/`
+folder present. Build on the Pi instead of copying a Linux binary from a PC;
+an x86 binary will not run on an ARM Raspberry Pi. The help must list `-r`
+and the four ranges.
 
+Check the sensor before using it in the plugin. Replace the port if needed,
+and choose a new filename each time:
 
+```bash
+lis2dwusb -p /dev/ttyACM0 -f 800 -r 16 -d 10 -s /tmp/lis2dw-check.csv
+echo "Exit code: $?"
+cat /tmp/lis2dw-check.csv.meta.json
+```
 
-# Marlin Setup
+Look for `verified complete`, exit code `0` and `valid: true`. At ±16 g the
+metadata should show `range_g: 16` and `counts_per_g: 2048`. The CSV is
+already in g. Start with **800 Hz / ±16 g**; try 1600 Hz after checking that
+your setup completes captures without errors. There is no automatic rate
+or range fallback.
 
-The reviewed c13 build uses Fixed-Time Motion v2 with static shapers and a
-trapezoidal trajectory. The plugin reads the current configuration and
-preserves it around calibration. Legacy ZV builds use a separate M593 adapter.
-Do not assume that a multi-hump recommendation can be applied with M593.
+## Dependencies Installation
 
-See [the full firmware contract](docs/firmware-contract.md) for the reviewed
-source revision, shaper IDs, numerical validation, timing constraints and
-recovery behavior. Native calibration additionally requires the custom c13
-M495 PIS:RT v2 host-arming extension; upstream M495 and PIS v1 cannot provide
-this capture barrier. See the
-[native backend implementation report and hardware walkthrough](docs/native-m495.md).
-The coordinated host-arming change is documented in both repositories. Firmware
-compilation does not flash the printer; the LIS2DW wrapper needs no update.
+Run the matching installer from this plugin's checkout on the Raspberry Pi:
 
-# Plugin Installation
+| Sensor | Command |
+| --- | --- |
+| ADXL345 SPI | `sudo OCTOPRINT_USER=pi bash bash/Octo-deps-install-ADXLSPI.sh` |
+| ADXL345 USB | `sudo OCTOPRINT_USER=pi bash bash/Octo-deps-install-ADXLUSB.sh` |
+| LIS2DW USB | `sudo OCTOPRINT_USER=pi bash bash/Octo-deps-install-LIS2DW.sh` |
 
-Install into OctoPrint's Python environment:
+Replace `pi` with your OctoPrint account. Keep the complete `bash/` folder;
+the installers share `install-common.sh`. SPI needs GPIO access through
+`sudo -n`; USB sensors use the serial group. Read the script before running it.
+
+The ADXL wrappers use a fixed ±16 g range. The pinned ADXL USB firmware has
+a known limitation: `F=` changes its polling rate, but its sensor ODR stays
+at 100 Hz. Verify or update that firmware before trusting high-rate captures.
+The plugin rate selector cannot fix the sensor's ODR. See the
+[sensor compatibility notes](docs/firmware-contract.md#sensor-installation-and-remaining-limitations)
+for the acquisition checks and remaining hardware limitations.
+
+## Marlin Setup
+
+### Native Marlin M495
+
+Use my **Marlin bugfix-2.1.x fork**, branch
+[`c13_octoprint`](https://github.com/navaismo/Marlin_bugfix_2.1_E3V3SE/tree/c13_octoprint),
+for the native workflow. It has the `RESONANCE_TEST` integration and the
+M495 PIS v2 events needed to synchronize the sensor with the test.
+
+In your board's `Configuration_adv.h`, enable these options and compile
+your normal firmware environment:
+
+```cpp
+#define EMERGENCY_PARSER
+#define RESONANCE_TEST
+#define PINPUT_RESONANCE_EVENTS
+```
+
+Keep your printer's input-shaping and FT Motion configuration. `RESONANCE_TEST`
+must be enabled in the firmware you actually install; having the source on
+that branch is not enough. `PINPUT_RESONANCE_PROGRESS` is optional.
+
+After installing the firmware, use **Detect Firmware**, then **Detect Native
+M495** in the plugin. Detection runs only when you press the buttons and saves
+the result in Settings. Detecting v2 also selects and saves **Native Marlin
+(M495)** as the backend. Repeat detection after reconnecting the printer.
+
+During a native calibration, Marlin homes and chooses its own XY position
+and Z height. The plugin's position controls are disabled. The sensor starts
+only after `ARMED_WAIT`; Marlin waits for the plugin's ARM before exciting
+the axis. See the [communication diagram](#m495-communication).
+
+### Other Marlin forks
+
+If your build already has native M495 resonance generation, use the
+[PIS v2 patch and instructions](docs/patches/README.md). The patch targets a
+specific upstream `bugfix-2.1.x` revision; older versions may need a port.
+It includes the events, host-arming barrier, cancellation hooks and C++ tests.
+It does not contain my printer configuration. Do not apply it to c13 again.
+
+Native calibration needs a `READY:2` reply to `M495 Q2`. Plain upstream M495
+or PIS v1 is not enough. The software-generated backend remains available;
+FTM uses `M493`, while supported legacy builds use ZV through `M593`.
+The [firmware contract](docs/firmware-contract.md) lists the reviewed
+configuration and shaper compatibility.
+
+## Plugin Installation
+
+Use OctoPrint's **Plugin Manager → Get More → From URL** with the archive for
+the branch you want to install. For this work:
+
+```text
+https://github.com/navaismo/Octoprint-Pinput_Shaping/tree/main
+```
+Or download the Zip rin Relase Section of the repo.
+
+You can also upload a source archive in Plugin Manager. Restart OctoPrint
+after installation, then reload the browser with **Ctrl+F5**. This installs
+the plugin; the sensor wrapper and firmware are separate steps above.
+
+For local development, use the Python environment where OctoPrint is installed:
 
 ```bash
 python -m pip install -e '.[test]'
 ```
 
-For a packaged installation, use OctoPrint's Plugin Manager and a source
-archive. Restart OctoPrint after backend changes. Copy the entire bash/
-directory when using a sensor installer, because the scripts share a helper.
-Choose the installer matching your hardware; inspect it before running.
-ADXL345 USB and SPI now install as separate executables.
+## Settings
 
-## Plugin Configuration
+Open **Settings → Pinput Shaping**. Pick your sensor, port and test backend,
+then save. The detection buttons also save the displayed plugin settings
+before checking the printer.
 
-Open Settings → Pinput Shaping and configure:
+![Plugin settings with native Marlin and LIS2DW selected](assets/ui-settings.png)
 
-- **Resonance Excitation Backend**: software remains the default. Native M495
-  requires a separate manual **Detect M495 Support** check for each connection.
-  Save the selection and parameters before calibration; there is no automatic fallback.
-- Sensor type, USB serial device and sensor channels. Combined XYZ spectra
-  reduce sensitivity to mounting orientation.
-- **LIS2DW sample rate (Hz)**: select **800** or **1600** in settings. The default
-  is 800 Hz; 1600 Hz remains available for a verified sensor/USB setup. The saved
-  selection applies to both the sensor precheck and calibration capture.
-- Start and maximum acceleration, analysis frequency range and excitation
-  duration. Travel limits always come from the active printer profile.
-- Damping ratio. It is copied into the measurement result and does not change
-  when settings are edited later.
+| Setting | What to use it for |
+| --- | --- |
+| Resonance excitation | Choose **Native Marlin (M495)** for the c13 workflow. Software mode keeps its own acceleration and duration controls. |
+| Start / End Freq | Native mode sends these as M495 F/T. The defaults are 20–60 Hz. In software mode they select the band to analyze. |
+| Seconds per octave | Native sweep speed. Default: 20 s/octave. A wider frequency range takes longer. |
+| Accel per Hz | Native M495 A parameter. Default: 40. Increase only after checking your machine and capture. |
+| Smoothing ceiling | Caps the suggested shaper acceleration. It does not set Marlin's native sweep acceleration. |
+| Damping Ratio | Used when fitting the shapers. Default: 0.05. |
+| Native test time limits | Preparation, maximum capture and cancellation timeouts. Leave the defaults unless your test needs more time. |
+| Accelerometer type | Select ADXL345 SPI, ADXL345 USB or LIS2DW USB. |
+| Sample rate | ADXL: 800/1600/3200 Hz, default 3200. LIS2DW: 800/1600 Hz, default 800. |
+| Accelerometer Range | LIS2DW only: ±2/4/8/16 g. New settings use ±16 g; existing saved settings keep their previous range. |
+| Sensor channels | **Combined XYZ** is useful when the sensor is not aligned with the printer axis. You can also select one sensor channel. |
+| Sensor serial port | Use the sensor's port, preferably `/dev/serial/by-id/...`, never the printer's port. Blank uses ACM1 for ADXL USB or ACM0 for LIS2DW. SPI ignores this field. |
 
-Native defaults are F20–T60 Hz, O20 seconds/octave and A40 acceleration/Hz.
-Preparation, capture and cancellation budgets are separately configurable.
-Marlin owns native homing, positioning and excitation; software acceleration,
-position and duration controls do not define this trajectory. The acceleration
-ceiling still caps theoretical shaper smoothing estimates. Parameters require
-validation on the actual machine.
+Printer dimensions come from the active OctoPrint printer profile. Fix that
+profile if the displayed dimensions are wrong.
 
-New installations use a 5–132 Hz analysis range; fitting starts at 20 Hz.
-Existing settings are retained. The analyzer checks the effective sample rate
-from captured timestamps, requiring at least 2.5 times the analysis end frequency.
-An effective rate near 797 Hz satisfies that check throughout the supported
-analysis range, up to 200 Hz. Sensor sample rate and motor reversals are separate
-settings. Failed captures are rejected without silently retrying at another rate.
-The pinned legacy LIS2DW installer still needs an acquisition-clock improvement;
-the separately installed protocol 2 wrapper provides device-side timing.
+## Using the Plugin
 
-## Plugin Usage
+1. Mount the sensor firmly on the part that moves for the axis: the toolhead
+   for X, and the bed for Y on a bed-slinger. Leave enough cable for travel.
+2. Press **Detect Firmware**, then **Detect Native M495**. The header shows
+   the detected firmware, native support, sensor and selected backend.
+3. Use **Sensor Values** for a short stationary capture. It shows the first
+   five samples and the captured sample count below **Test Progress**.
+4. Press **Calibrate X** or **Calibrate Y** and confirm the movement. In native
+   mode, Marlin controls homing and test position. In software mode, choose a
+   numbered grid cell and Z height first; use at least 10 mm of clearance.
+5. Watch **Test Progress**. Axis-check messages and error details appear
+   directly below it. Results open when a complete capture passes analysis.
 
-### Hardware Checks
+**Test X Axis / Test Y Axis** are short movement checks, separate from
+resonance calibration. They can home and move the printer. Coordinate modes
+are prepared by the test; there is no separate Prepare button.
 
-1. Select the correct printer profile and sensor serial port.
-   With the printer connected and idle, click **Detect firmware** to check
-   input-shaping support. The tab shows **FTM v2 (M493)** or **Legacy ZV (M593)**.
-   Detection runs only on request; startup, connection and returning to idle
-   do not send probes or schedule retries. Repeat detection after reconnecting
-   or an interrupted check. Unknown or incompatible firmware keeps calibration
-   and result application disabled.
-2. Click **Prepare coordinate modes** to explicitly select millimeters,
-   absolute positioning, absolute extrusion and the preparation feed rate.
-   This action does not command axis displacement.
-3. Check **Sensor values**. USB sensor paths must differ from the printer port.
-4. Use **Test X axis** or **Test Y axis** for a bounded, low-speed motion check.
+![A native test in progress](assets/ui-test-progress.png)
 
-**Cancel test** stops the calibration sequence and restores settings after
-motion already accepted by the firmware drains. Commands still waiting in
-OctoPrint are discarded. **Stop printer (M112)** requests shutdown without a
-confirmation dialog. It is not a substitute for a physical stop device.
-In native mode, ordinary cancellation uses M496 and waits for a valid terminal
-event plus its queued acknowledgment fence. Synchronous preparation can delay
-the stop. An unresolved native stop blocks further operations and requires
-explicit recovery; losing serial communication is not proof of physical stop.
+| Stage or response | What is happening |
+| --- | --- |
+| Preparing | The plugin checks the settings and sensor launch configuration. |
+| Homing / positioning | Marlin moves to its test position. Native sensor capture is still off. |
+| ARMED_WAIT / starting capture | Marlin is ready and waiting. The plugin starts the sensor and checks that new timestamped samples arrive. |
+| Arming native sweep | The plugin sends ARM. Marlin accepts it with ARM_ACK, then sends START before excitation. |
+| Measuring | The sensor records the sweep. A percentage may be estimated; it is not proof that motion has completed. |
+| Stopping / validating / analyzing | COMPLETE was received. The plugin records a short tail, stops the sensor and checks the data. |
+| Complete | The results are ready. Review them before applying anything. |
 
-### Running Input Shaping Tests
+**Cancel Test** requests cancellation and waits for the printer to stop before
+cleanup. **Emergency Stop** sends `M112`; use it when an immediate shutdown
+is needed. Neither button replaces access to the printer's physical stop.
 
-For **Native Marlin (M495)**, manually detect firmware and M495 support, save
-the native settings and verify the sensor. Select **Calibrate X** or
-**Calibrate Y** with the native homing/positioning area clear. Capture starts
-before M495. START follows preparation; only COMPLETE establishes successful
-motion, and a validated capture is still required. Estimated progress is
-labelled and never substitutes for COMPLETE. Native plots show a relative
-fundamental response, with explicit alignment uncertainty and quality gates.
-Unreliable data cannot produce an applicable recommendation. Follow the
-[full supervised walkthrough](docs/native-m495.md#hardware-walkthrough).
+## Results
 
-For **Software-generated Sweep (Legacy)**:
+![Measurement results, shaper selection and graphs](assets/ui-results.png)
 
-Select a grid point and a Z height of at least 10 mm. Secure the sensor to the
-moving component for the tested axis, clear the travel area and select
-**Calibrate X** or **Calibrate Y**. The plugin checks the sensor before homing,
-disables existing shaping for measurement and records motion completion times.
-Only one calibration operation can run at a time.
+- **Axis Results** shows the measured resonance and recommended shaper.
+- **Measurement Quality** shows coverage, alignment and detected peaks.
+- The table compares the fitted shapers. The recommended row stays marked
+  even when you select another candidate.
+- **Apply Measured Settings** previews the command for your selection.
+  **Use Recommendation** returns to the suggested shaper. The apply button
+  sends it to the tested axis and reads it back; it does not save EEPROM.
+- **Overview**, **Time Signal**, **Frequency Response** and **Diagnostics**
+  switch the graphs and downloads. Protocol events show what Marlin reported.
 
-The test restores the original acceleration-sweep approach: center/high/center/low
-motion with 5–1 mm excursions and increasing acceleration. The analysis range
-selects vibration frequencies in the measured spectrum, independently of the
-motor reversal rate. New installations default to 5–132 Hz and a 20-second target
-excitation. Eight acceleration stages use at least four cycles each; the complete
-ramp is queued without intermediate `M400` barriers or host waits. Whole cycles
-can extend that duration. Existing saved settings are
-preserved; change the analysis end frequency if it was previously reduced.
+With FTM, you can apply any fitted candidate from that measurement. Legacy
+firmware is limited to ZV. A diagnostic result without a valid recommendation
+keeps application disabled. Test the result with a print before saving it
+to EEPROM yourself.
 
-The former tiny-segment frequency sweep and its step/acceleration frequency cap
-have been removed. A final completion barrier and a minimum travel-time check remain;
-the controller does not claim a precise excitation frequency from host timing.
-Signal-quality checks still reject missing samples, clipping, flat captures and
-unclear peaks. Measured frequency coverage and repeatability need hardware checks.
+Use **Test setup** to go back and **View results** to reopen the measurement.
+A new calibration or printer reconnect invalidates the previous result.
 
-Diagnostics are written to `Pinput_Shaping.log` in OctoPrint's configured log
-folder (normally `~/.octoprint/logs/`). Per-run timing and sensor output remain
-under the plugin data folder in `runs/<session>/excitation.json`,
-`capture.csv.log` and `sensor_check.csv.log`.
-For native runs, the plugin log distinguishes queued M495/M496 commands from
-actual transmissions and records PIS:RT responses with their numeric firmware
-ID. Sensor errors include reported device reasons such as CLIPPING. The run
-diagnostic preserves the failure phase and events received during cancellation.
-Capturing preparation is required by the current M495 lifecycle; a device
-clipping rejection during homing invalidates the acquisition even though
-analysis excludes homing samples.
+## Errors and Logs
 
-### Results
+![Error popup and the failed progress stage](assets/ui-error.png)
 
-A complete result contains the measured resonance, selected shaper and its
-frequency, damping, predicted spectra, quality information and raw CSV.
-PNG plots remain available offline; interactive Plotly charts are optional.
+Errors open a red popup and mark the interrupted progress stage in red.
+Close the popup to keep working; **View details** below Progress opens it
+again. Failed runs keep their session ID and available diagnostic downloads.
 
-With FTM, select any fitted candidate under **Shaper to apply**. The recommendation
-is selected initially and remains marked in the comparison table; **Use
-recommendation** restores that selection. The command preview follows your
-choice. **Apply and verify selected shaper** sends its saved frequency, damping
-and applicable tolerance, then reads the setting back. Legacy firmware offers
-only **Apply and verify recommended ZV**; advanced shapers cannot be sent.
-The browser submits the session identifier and shaper name; the backend builds
-the command from saved measurement data. Results are invalidated by a new test,
-a reconnect or a change to the saved firmware configuration. EEPROM is not written. Verify
-repeatability and print quality before saving settings manually.
+| Message | What to check |
+| --- | --- |
+| CLIPPING | Sensor range, mounting and test acceleration. For LIS2DW, check the selected range and matching firmware. |
+| BUFFER_OVERFLOW or missing samples | USB connection, host load and sampling rate. Try an explicit 800 Hz setting after investigating the failure. |
+| No new samples / startup failed | Sensor port, permissions, wrapper installation and sensor firmware. |
+| M495 unsupported / PIS v1 | Install a build with the v2 integration or use software mode. |
+| ARM_TIMEOUT | The sensor did not become ready in time. Marlin does not start the sweep. |
+| Restore saved settings | Check that the same printer is stopped, then use recovery. Do not start another test until it succeeds. |
 
-If calibration is interrupted and cannot restore its settings, reset or
-reconnect the same printer and use **Restore saved settings**. Further tests
-remain blocked until recovery succeeds.
-For native recovery, first verify that the printer is fully stopped or reset,
-then confirm that state in the recovery prompt. Native recovery sends M496,
-drains the queued command and verifies settings; it does not blindly overwrite
-unrelated firmware values. Failed native runs retain downloadable CSV, sensor,
-protocol and analysis diagnostics.
+The plugin log is normally `~/.octoprint/logs/Pinput_Shaping.log`. It records
+commands sent, firmware events, capture errors and analysis results, including
+the recommended shaper and the other fitted candidates.
 
-## Development and Validation
+Each run also has files under
+`~/.octoprint/data/Pinput_Shaping/runs/<session>/`: the capture CSV, sensor log,
+protocol events and analysis diagnostics. LIS2DW includes verified sensor
+metadata. Protocol times are host receive times; they are not the sensor's
+sample clock or Marlin's clock.
+
+## M495 Communication
+
+This UML sequence shows detection and a native calibration. The first query
+is **`M495 Q`**, which asks for protocol 1; **`M495 Q1` is not accepted**.
+The second query, **`M495 Q2`**, checks host-arming support. Each query is
+bracketed by its own M118 markers so an old reply cannot enable a new session.
+
+```mermaid
+sequenceDiagram
+    actor User
+    participant P as OctoPrint plugin
+    participant M as Marlin
+    participant S as Sensor wrapper
+    User->>P: Detect Native M495
+    P->>P: Save plugin settings
+    P->>M: M118 opening query marker
+    P->>M: M495 Q
+    M-->>P: echo:PIS:RT:READY:1
+    P->>M: M118 closing query marker
+    P->>M: M118 opening v2 marker
+    P->>M: M495 Q2
+    M-->>P: echo:PIS:RT:READY:2
+    P->>M: M118 closing v2 marker
+    P->>P: Save support and select Native M495
+    User->>P: Calibrate X or Y
+    P->>M: M495 X F20 T60 O20 A40 I12345678 S W
+    M->>M: Home axes
+    M-->>P: HOMED:12345678:millis
+    M->>M: Position and prepare generator
+    M-->>P: ARMED_WAIT:12345678
+    Note over M: Generator off, 30-second ARM timeout starts here
+    P->>S: Start capture
+    S-->>P: Alive, new samples, increasing timestamps
+    P->>P: Recheck sensor health
+    P->>M: M495 I12345678 R
+    M->>M: Validate ID, port, deadline and prepared state
+    M-->>P: ARM_ACK:12345678
+    M-->>P: START:12345678:X:20.00:60.00
+    M->>M: Run native excitation
+    S-->>P: Record acceleration
+    alt Successful sweep
+        M-->>P: COMPLETE:12345678 after all native movement
+        P->>S: Capture 0.5 s tail, then Q
+        S-->>P: Successful EOF and capture metadata when available
+        P->>P: Verify settings, analyze and show results
+    else Sensor failure or user cancellation
+        P->>M: M496
+        P->>M: M118 cancellation queue fence
+        M-->>P: ABORTED or ERROR with matching ID
+        M-->>P: Fence received
+        P->>S: Stop capture
+        P->>P: Verify cleanup or require recovery
+    end
+```
+
+All firmware events above use the `echo:PIS:RT:` prefix. If ARM never
+arrives, Marlin sends `ERROR:<id>:ARM_TIMEOUT` and never starts excitation.
+Once ARM has been sent, a sensor failure requests M496 even if START has
+not reached OctoPrint yet. There are no automatic movement retries.
+
+[PlantUML source](docs/diagrams/m495-host-arming.puml) ·
+[Full native protocol](docs/native-m495.md) ·
+[Patch for other Marlin builds](docs/patches/README.md)
+
+## Development
 
 ```bash
 python -m pytest -q
@@ -498,15 +612,17 @@ node tests/test_frontend.js
 PINPUT_FIRMWARE_ROOT=/path/to/Marlin_c13_octoprint python -m pytest -q tests/test_c13_contract.py
 ```
 
-Tests use synthetic captures, a simulated serial transport and stored output
-from the actual c13 C++ shaper functions. The optional live contract requires a
-C++ compiler and the firmware checkout. With OctoPrint installed, additional
-tests check real plugin registration, download routing and command tags without
-opening a device. CI includes a dedicated OctoPrint 1.11.8 integration job.
-These checks do not validate physical motion or replace a supervised hardware
-test.
+Tests use simulated printers and sensor data. They do not replace a test on
+your machine. Build a source archive with `python setup.py sdist`.
 
 ## License
 
 GPLv3 © [@navaismo](https://github.com/navaismo)
 
+## Disclaimer
+
+**BAU:**<br>
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE SOFTWARE.
+
+**TL;DR:**<br>
+If your house burns down because this app malfunctioned, you cannot sue me.
