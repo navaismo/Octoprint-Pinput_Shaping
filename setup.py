@@ -14,7 +14,7 @@ plugin_package = "octoprint_Pinput_Shaping"
 plugin_name = "OctoPrint-Pinput_Shaping"
 
 # The plugin's version. Can be overwritten within OctoPrint's internal data via __plugin_version__ in the plugin module
-plugin_version = "0.0.4.9"
+plugin_version = "0.0.5"
 
 # The plugin's description. Can be overwritten within OctoPrint's internal data via __plugin_description__ in the plugin
 # module
@@ -33,7 +33,7 @@ plugin_url = "https://github.com/navaismo/OctoPrint-Pinput_Shaping"
 plugin_license = "AGPLv3"
 
 # Any additional requirements besides OctoPrint should be listed here
-plugin_requires = ["numpy==2.0.2", "scipy==1.13.1", "matplotlib==3.9.4", "pandas==2.3.0", "pexpect", "libopenblas0", "contourpy==1.2.1"]
+plugin_requires = ["numpy", "scipy==1.13.1", "matplotlib==3.9.4", "pandas==2.3.0", "pexpect", "contourpy==1.2.1"]
 
 ### --------------------------------------------------------------------------------------------------------------------
 ### More advanced options that you usually shouldn't have to touch follow after this point
@@ -59,9 +59,11 @@ plugin_ignored_packages = []
 # Example:
 #     plugin_requires = ["someDependency==dev"]
 #     additional_setup_parameters = {"dependency_links": ["https://github.com/someUser/someRepo/archive/master.zip#egg=someDependency-dev"]}
-# "python_requires": ">=3,<4" blocks installation on Python 2 systems, to prevent confused users and provide a helpful error. 
-# Remove it if you would like to support Python 2 as well as 3 (not recommended).
-additional_setup_parameters = {"python_requires": ">=3,<4"}
+# Keep compatibility aligned with the pinned scientific wheels and CI matrix.
+additional_setup_parameters = {
+    "python_requires": ">=3.9,<3.13",
+    "extras_require": {"test": ["pytest>=7,<9"]},
+}
 
 ########################################################################################################################
 

@@ -1,4 +1,7 @@
 *.pyc
+__pycache__/
+.pytest_cache/
+.venv/
 *.swp
 .idea
 *.iml
@@ -7,3 +10,4 @@ dist
 *.egg*
 .DS_Store
 *.zip
+ui_screens

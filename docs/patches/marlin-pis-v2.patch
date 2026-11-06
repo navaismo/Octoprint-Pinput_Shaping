@@ -1,0 +1,1316 @@
+diff --git a/Marlin/Configuration_adv.h b/Marlin/Configuration_adv.h
+--- a/Marlin/Configuration_adv.h
++++ b/Marlin/Configuration_adv.h
+@@ -1322,6 +1322,12 @@
+ 
+ #if ANY(INPUT_SHAPING_X, INPUT_SHAPING_Y, INPUT_SHAPING_Z, FTM_SHAPER_ZV, FTM_SHAPER_ZVD, FTM_SHAPER_ZVDD, FTM_SHAPER_ZVDDD, FTM_SHAPER_EI, FTM_SHAPER_2HEI, FTM_SHAPER_3HEI, FTM_SHAPER_MZV)
+   //#define RESONANCE_TEST              // Sine sweep motion for resonance study
++  #if ENABLED(RESONANCE_TEST)
++    //#define PINPUT_RESONANCE_EVENTS   // M495 PIS v1/v2 host events; see docs/resonance-host-events.md.
++    #if ENABLED(PINPUT_RESONANCE_EVENTS)
++      //#define PINPUT_RESONANCE_PROGRESS // Optional best-effort 1 Hz reports.
++    #endif
++  #endif
+ #endif
+ 
+ // @section motion
+diff --git a/Marlin/src/MarlinCore.cpp b/Marlin/src/MarlinCore.cpp
+--- a/Marlin/src/MarlinCore.cpp
++++ b/Marlin/src/MarlinCore.cpp
+@@ -55,6 +55,7 @@
+ #endif
+ #if ENABLED(RESONANCE_TEST)
+   #include "feature/resonance/resonance_generator.h"
++  #include "feature/resonance/resonance_host_events.h"
+ #endif
+ 
+ #include "gcode/gcode.h"
+@@ -837,6 +838,9 @@
+     if (TERN1(HAS_PRUSA_MMU2, !mmu2.enabled()) && TERN1(HAS_PRUSA_MMU3, !mmu3.enabled()))
+       runout.run();
+   #endif
++
++  // Service host arming and deferred resonance events outside the ISR.
++  TERN_(PINPUT_RESONANCE_EVENTS, resonance_host_events::idle());
+ 
+   // Run HAL idle tasks
+   hal.idletask();
+diff --git a/Marlin/src/feature/resonance/resonance_generator.cpp b/Marlin/src/feature/resonance/resonance_generator.cpp
+--- a/Marlin/src/feature/resonance/resonance_generator.cpp
++++ b/Marlin/src/feature/resonance/resonance_generator.cpp
+@@ -25,6 +25,7 @@
+ #if ENABLED(RESONANCE_TEST)
+ 
+ #include "resonance_generator.h"
++#include "resonance_host_events.h"
+ 
+ #if ENABLED(FT_MOTION)
+   #include "../../module/ft_motion.h"
+@@ -55,10 +56,16 @@
+ 
+ void ResonanceGenerator::start() {
+   gcode.home_all_axes(); // Always home axes first
++  // PINPUT_RESONANCE_EVENTS: custom host synchronization hook
++  if (TERN0(PINPUT_RESONANCE_EVENTS, !resonance_host_events::prepared())) return;
++  TERN_(PINPUT_RESONANCE_EVENTS, resonance_host_events::homed());
+   motion.blocking_move_xy(X_CENTER, Y_CENTER, Z_CLEARANCE_FOR_HOMING);
++  if (TERN0(PINPUT_RESONANCE_EVENTS, !resonance_host_events::prepared())) return;
+ 
+   rt_params.start_pos = motion.position;
+-  active = true;
++  #if DISABLED(PINPUT_RESONANCE_EVENTS)
++    active = true;
++  #endif
+   done = false;
+ 
+   // Clamp Z-axis acceleration for safety
+@@ -84,9 +91,24 @@
+   freq_mul_inc = F2FPQ(exp2f(RESONANCE_TS / rt_params.octave_duration) - 1.0f);
+   // Use Q28 for phase calculation only for consistency between freq and phase (Q16 is enough)
+   phase_inc_fp = F2FPQ((2.0f * M_PI) * RESONANCE_TS);
+-}
++
++  // PINPUT_RESONANCE_EVENTS: custom host synchronization hook
++  #if ENABLED(PINPUT_RESONANCE_EVENTS)
++    if (resonance_host_events::wait_for_arm()) return;
++    activate();
++  #endif
++}
++
++#if ENABLED(PINPUT_RESONANCE_EVENTS)
++  void ResonanceGenerator::activate() {
++    if (!resonance_host_events::exciting()) return;
++    active = true; // Fully initialized, authorized, and START already queued.
++  }
++#endif
+ 
+ void ResonanceGenerator::abort() {
++  // PINPUT_RESONANCE_EVENTS: custom host synchronization hook (may run in ISR)
++  if (TERN0(PINPUT_RESONANCE_EVENTS, !resonance_host_events::stopping(done))) return;
+   reset();
+   #if HAS_STANDARD_MOTION
+     if (!TERN0(FT_MOTION, ftMotion.cfg.active))
+@@ -163,6 +185,9 @@
+ #if HAS_STANDARD_MOTION
+ 
+   block_t* ResonanceGenerator::generate_resonance_block() {
++    // PINPUT_RESONANCE_EVENTS: custom host synchronization hook (ISR, no serial)
++    if (TERN0(PINPUT_RESONANCE_EVENTS, resonance_host_events::stop_requested())) return nullptr;
++
+     // Static variables to retain state between calls and avoid cumulative errors
+     static float prev_pos = 0.0f, step_accumulator = 0.0f;
+ 
+diff --git a/Marlin/src/feature/resonance/resonance_generator.h b/Marlin/src/feature/resonance/resonance_generator.h
+--- a/Marlin/src/feature/resonance/resonance_generator.h
++++ b/Marlin/src/feature/resonance/resonance_generator.h
+@@ -71,8 +71,19 @@
+ 
+     ResonanceGenerator();
+ 
++    // PINPUT_RESONANCE_EVENTS: custom host synchronization hook
++    #if ENABLED(PINPUT_RESONANCE_PROGRESS)
++      static float host_frequency() {
++        const volatile int32_t &freq = current_freq_fp; // Aligned 32-bit read; supported targets are 32-bit.
++        return FP2F(freq);
++      }
++    #endif
++
+     static void reset();
+     static void start();
++    #if ENABLED(PINPUT_RESONANCE_EVENTS)
++      static void activate(); // Resume only a fully prepared, authorized sweep.
++    #endif
+ 
+     // Return frequency based on timeline
+     static float getFrequencyFromTimeline() {
+diff --git a/Marlin/src/feature/resonance/resonance_host_events.cpp b/Marlin/src/feature/resonance/resonance_host_events.cpp
+new file mode 100644
+--- /dev/null
++++ b/Marlin/src/feature/resonance/resonance_host_events.cpp
+@@ -0,0 +1,406 @@
++/**
++ * Marlin 3D Printer Firmware
++ * Copyright (c) 2026 MarlinFirmware [https://github.com/MarlinFirmware/Marlin]
++ *
++ * Based on Sprinter and grbl.
++ * Copyright (c) 2011 Camiel Gubbels / Erik van der Zalm
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
++ *
++ */
++#include "../../inc/MarlinConfig.h"
++
++#if ENABLED(PINPUT_RESONANCE_EVENTS)
++
++#include "resonance_host_events.h"
++#include "resonance_generator.h"
++#include "../../MarlinCore.h"
++#include "../../gcode/gcode.h"
++#include "../../module/stepper.h"
++#if ENABLED(FT_MOTION)
++  #include "../../module/ft_motion.h"
++#endif
++
++namespace resonance_host_events {
++
++  enum class Phase : uint8_t { Idle, Preparing, WaitingArm, ArmAccepted, Exciting, CompletePending, AbortPending };
++  static volatile Phase phase = Phase::Idle;
++  static volatile bool cancelled;
++  static bool failed, reporting, host_arm;
++  static millis_t arm_deadline_ms;
++  static constexpr millis_t ARM_TIMEOUT_MS = 30000;
++  #if ENABLED(PINPUT_RESONANCE_PROGRESS)
++    static millis_t next_progress_ms;
++  #endif
++  static uint32_t session_id;
++  #if HAS_MULTI_SERIAL
++    static SerialMask session_port = SerialMask::All;
++  #endif
++
++  static void error(const uint32_t id, FSTR_P reason) {
++    SERIAL_ECHO_START();
++    SERIAL_ECHOLN(F("PIS:RT:ERROR:"), id, C(':'), reason);
++  }
++
++  static char upper(const char c) {
++    return TERN0(GCODE_CASE_INSENSITIVE, WITHIN(c, 'a', 'z')) ? c - 'a' + 'A' : c;
++  }
++
++  // Inspect the original token, not value_ulong(): that would truncate fractions,
++  // accept signs, lose leading zeroes, and wrap an oversized integer.
++  static bool read_id(uint32_t &id) {
++    const char *token = nullptr;
++    for (const char *c = parser.command_ptr; *c; ++c) {
++      if (upper(*c) != 'I') continue;
++      if (token || c == parser.command_ptr || c[-1] != ' ') return false;
++      token = c + 1;
++    }
++    if (!token || !WITHIN(*token, '1', '9')) return false;
++    id = 0;
++    do {
++      const uint8_t digit = *token++ - '0';
++      if (id > UINT32_MAX / 10 || (id == UINT32_MAX / 10 && digit > UINT32_MAX % 10)) return false;
++      id = id * 10 + digit;
++    } while (NUMERIC(*token));
++    return !*token || *token == ' ';
++  }
++
++  static bool numeric(const char c, float &value) {
++    if (!parser.seen(c)) return true;
++    if (!parser.has_value()) return false;
++    char *end;
++    value = strtof(parser.value_string(), &end);
++    return isfinite(value) && (!*end || *end == ' ' || WITHIN(upper(*end), 'A', 'Z'));
++  }
++
++  static void terminal(FSTR_P event);
++  static bool arm_valid();
++
++  static void arm_reply(const uint32_t id, FSTR_P reason=nullptr) {
++    SERIAL_ECHO_START();
++    SERIAL_ECHO(F("PIS:RT:"), reason ? F("ARM_REJECTED:") : F("ARM_ACK:"), id);
++    if (reason) SERIAL_ECHO(C(':'), reason);
++    SERIAL_EOL();
++  }
++
++  bool reject_command() {
++    if (phase != Phase::WaitingArm && phase != Phase::ArmAccepted) return false;
++    // Allow only lifecycle, transport, and read-only/reporting commands. Reject
++    // before dispatch, including injected G-code, so the prepared state survives.
++    if (parser.command_letter == 'M') switch (parser.codenum) {
++      case 105: case 110: case 112: case 113: case 114: case 115:
++      case 118: case 119: case 154: case 155: case 400: case 495: case 496: case 503:
++        return false;
++    }
++    SERIAL_ERROR_MSG("PIS_ARM_WAIT");
++    return true;
++  }
++
++  bool command() {
++    REMEMBER(report, reporting, true);
++    // Query takes precedence, even over S. It cannot reach configuration / motion.
++    if (parser.seen_test('Q')) {
++      for (char c = 'A'; c <= 'Z'; ++c)
++        if (c != 'Q' && parser.seen_test(c)) {
++          error(0, F("INVALID_PARAMETERS"));
++          return true;
++        }
++      const bool v2 = parser.seenval('Q');
++      // Only the canonical Q2 token opts into the new protocol. Q stays v1.
++      if (v2 && (parser.value_string()[0] != '2'
++          || (parser.value_string()[1] && parser.value_string()[1] != ' ')))
++        error(0, F("INVALID_PARAMETERS"));
++      else {
++        SERIAL_ECHO_START();
++        SERIAL_ECHOLN(F("PIS:RT:READY:"), v2 ? 2 : 1);
++      }
++      return true;
++    }
++
++    const bool instrumented = parser.seen_test('I');
++    uint32_t id = 0;
++    if (instrumented && !read_id(id)) {
++      error(0, F("INVALID_SESSION_ID"));
++      return true;
++    }
++    if (parser.seen_test('R')) {
++      bool valid = instrumented && !parser.seenval('R');
++      for (char c = 'A'; c <= 'Z'; ++c)
++        if (parser.seen_test(c) && c != 'I' && c != 'R') valid = false;
++      if (!valid) { arm_reply(id, F("INVALID_PARAMETERS")); return true; }
++      #if HAS_MULTI_SERIAL
++        for (uint8_t bit = 1; bit; bit <<= 1)
++          if (session_port.enabled(SerialMask(bit)) != multiSerial.portMask.enabled(SerialMask(bit))) {
++            arm_reply(id, F("PORT_MISMATCH"));
++            return true;
++          }
++      #endif
++      if (id != session_id) { arm_reply(id, F("SESSION_MISMATCH")); return true; }
++      if (host_arm && phase == Phase::Exciting) {
++        // Idempotent acknowledgment only; never regenerate or repeat START.
++        if (!cancelled && !EmergencyParser::rt_stop_by_M496
++            && marlin.isRunning() && motion.all_axes_trusted()) arm_reply(id);
++        else arm_reply(id, F("NOT_WAITING"));
++        return true;
++      }
++      if (!host_arm || phase != Phase::WaitingArm) { arm_reply(id, F("NOT_WAITING")); return true; }
++      if (!arm_valid()) return true; // Terminal cancellation / timeout / state error.
++      phase = Phase::ArmAccepted; // Consume the authorization before any serial output.
++      arm_reply(id);
++      if (phase == Phase::ArmAccepted)
++        rtg.activate(); // Recheck cancellation/deadline after output, before publishing active.
++      return true;
++    }
++    if (phase != Phase::Idle || (instrumented && rtg.isActive())) {
++      // Replaying the active ID must not look like a terminal ERROR for that session.
++      if (instrumented && (phase == Phase::Idle || id != session_id)) error(id, F("TEST_BUSY"));
++      else SERIAL_ERROR_MSG("TEST_BUSY");
++      return true; // Don't mutate settings of an active instrumented test.
++    }
++    if (!instrumented) {
++      if (parser.seen_test('W')) { error(0, F("INVALID_PARAMETERS")); return true; }
++      return false;
++    }
++
++    const resonance_test_params_t &p = rtg.rt_params;
++    const uint8_t axes = parser.seen_test('X') + parser.seen_test('Y') + parser.seen_test('Z');
++    float f = p.min_freq, t = p.max_freq, o = p.octave_duration,
++          a = p.accel_per_hz, c = p.amplitude_correction;
++    bool valid = parser.seen_test('S') && axes <= 1 && (axes || p.axis != NO_AXIS_ENUM);
++    for (char key = 'A'; key <= 'Z'; ++key)
++      if (parser.seen_test(key) && !strchr("ACFIOSTWXYZ", key)) valid = false;
++    valid = !parser.seenval('W') && valid;
++    valid = numeric('F', f) && numeric('T', t) && numeric('O', o)
++         && numeric('A', a) && numeric('C', c) && valid;
++    // Avoid non-finite values and overflow of the existing Q16 amplitude precalc.
++    valid = valid && f >= 5 && t > f && t <= 200 && WITHIN(o, 20, 60)
++         && a > 0 && WITHIN(c, 1, 8) && floorf(c) == c
++         && (c * a * 0.25f) / sq(M_PI) < 32767.0f;
++    if (!valid) {
++      error(id, F("INVALID_PARAMETERS"));
++      return true;
++    }
++    session_id = id;
++    cancelled = failed = false;
++    host_arm = parser.seen_test('W');
++    #if HAS_MULTI_SERIAL
++      session_port = multiSerial.portMask;
++    #endif
++    phase = Phase::Preparing;
++    return false; // Let the native handler configure and start the sweep.
++  }
++
++  static void terminal(FSTR_P event) {
++    REMEMBER(report, reporting, true);
++    #if HAS_MULTI_SERIAL
++      PORT_REDIRECT(session_port);
++    #endif
++    // Clear before serial output, which may service nested idle tasks on some HALs.
++    const uint32_t id = session_id;
++    phase = Phase::Idle;
++    session_id = 0;
++    host_arm = false;
++    if (failed) error(id, F("MOTION_FAILED"));
++    else {
++      SERIAL_ECHO_START();
++      SERIAL_ECHOLN(F("PIS:RT:"), event, C(':'), id);
++    }
++  }
++
++  bool stop_requested() { return phase == Phase::Exciting && cancelled; }
++
++  bool cancel() {
++    if (phase == Phase::Idle) return false;
++    EmergencyParser::rt_stop_by_M496 = false;
++    if (phase == Phase::Preparing) {
++      // G28 / blocking positioning must return before reporting a stopped session.
++      cancelled = true;
++    }
++    else if (phase == Phase::WaitingArm || phase == Phase::ArmAccepted) {
++      cancelled = true;
++      rtg.reset(); // No test blocks or FT frames have been generated.
++      terminal(F("ABORTED"));
++    }
++    else if (phase == Phase::Exciting) {
++      const bool awake = stepper.suspend();
++      if (phase == Phase::Exciting) { // The ISR may have completed before suspend().
++        cancelled = true;
++        // Standard motion stops at its next block boundary (current_block=nullptr),
++        // avoiding a reset while the ISR still owns the synthetic resonance block.
++        // FT Motion retains the native atomic reset of its stepping buffer.
++        if (TERN0(FT_MOTION, ftMotion.cfg.active)) rtg.abort();
++      }
++      if (awake) stepper.wake_up();
++    }
++    return true;
++  }
++
++  bool prepared() {
++    if (phase != Phase::Preparing) return true; // Legacy start
++    if (EmergencyParser::rt_stop_by_M496) cancel();
++    if (cancelled) {
++      terminal(F("ABORTED"));
++      return false;
++    }
++    FSTR_P reason = nullptr;
++    if (!marlin.isRunning()) reason = F("MOTION_FAILED");
++    else if (!motion.all_axes_trusted()) reason = F("AXIS_NOT_HOMED");
++    if (reason) {
++      #if HAS_MULTI_SERIAL
++        PORT_REDIRECT(session_port);
++      #endif
++      const uint32_t id = session_id;
++      phase = Phase::Idle;
++      session_id = 0;
++      error(id, reason);
++      return false;
++    }
++    return true;
++  }
++
++  static void fail_wait(FSTR_P reason) {
++    REMEMBER(report, reporting, true);
++    #if HAS_MULTI_SERIAL
++      PORT_REDIRECT(session_port);
++    #endif
++    const uint32_t id = session_id;
++    phase = Phase::Idle;
++    session_id = 0;
++    host_arm = false;
++    rtg.reset();
++    error(id, reason);
++  }
++
++  static bool arm_valid() {
++    if (EmergencyParser::rt_stop_by_M496 || cancelled) { cancel(); return false; }
++    if (ELAPSED(millis(), arm_deadline_ms)) { fail_wait(F("ARM_TIMEOUT")); return false; }
++    if (!marlin.isRunning()) { fail_wait(F("MOTION_FAILED")); return false; }
++    if (!motion.all_axes_trusted()) { fail_wait(F("AXIS_NOT_HOMED")); return false; }
++    bool changed = planner.has_blocks_queued();
++    LOOP_NUM_AXES(axis)
++      if (motion.position[axis] != rtg.rt_params.start_pos[axis]) changed = true;
++    #if ENABLED(FT_MOTION)
++      changed |= ftMotion.stepping.is_busy() || bool(ftMotion.stepping.step_bits);
++    #endif
++    if (changed) { fail_wait(F("PREPARED_STATE_CHANGED")); return false; }
++    return true;
++  }
++
++  void homed() {
++    if (!host_arm || phase != Phase::Preparing) return;
++    REMEMBER(report, reporting, true);
++    #if HAS_MULTI_SERIAL
++      PORT_REDIRECT(session_port);
++    #endif
++    SERIAL_ECHO_START();
++    SERIAL_ECHOLN(F("PIS:RT:HOMED:"), session_id, C(':'), millis());
++  }
++
++  bool wait_for_arm() {
++    if (!host_arm || phase != Phase::Preparing) return false;
++    REMEMBER(report, reporting, true);
++    #if HAS_MULTI_SERIAL
++      PORT_REDIRECT(session_port);
++    #endif
++    phase = Phase::WaitingArm;
++    arm_deadline_ms = millis() + ARM_TIMEOUT_MS;
++    SERIAL_ECHO_START();
++    SERIAL_ECHOLN(F("PIS:RT:ARMED_WAIT:"), session_id);
++    return true;
++  }
++
++  bool exciting() {
++    if (phase == Phase::ArmAccepted) {
++      if (!arm_valid()) return false;
++    }
++    else if (phase != Phase::Preparing) return phase == Phase::Idle;
++    else if (host_arm) return false; // Never bypass the opt-in barrier.
++    const Phase accepted_phase = phase;
++    REMEMBER(report, reporting, true);
++    #if ENABLED(PINPUT_RESONANCE_PROGRESS)
++      next_progress_ms = millis() + 1000;
++    #endif
++    #if HAS_MULTI_SERIAL
++      PORT_REDIRECT(session_port);
++    #endif
++    SERIAL_ECHO_START();
++    SERIAL_ECHO(F("PIS:RT:START:"), session_id, C(':'), C(AXIS_CHAR(rtg.rt_params.axis)), C(':'));
++    SERIAL_ECHO(p_float_t(rtg.rt_params.min_freq, 2));
++    SERIAL_CHAR(':');
++    SERIAL_ECHO(p_float_t(rtg.rt_params.max_freq, 2));
++    SERIAL_EOL();
++    // Serial helpers may service nested idle tasks. An emergency M496 received
++    // while emitting ACK/START must still win before the generator is active.
++    if (phase != accepted_phase || (host_arm && !arm_valid())) return false;
++    phase = Phase::Exciting;
++    return true;
++  }
++
++  bool stopping(const bool done) {
++    if (phase != Phase::Exciting) return true;
++    #if ENABLED(FT_MOTION)
++      // Native FTMotion::loop calls abort again on each idle pass while done.
++      // A final pulse can be scheduled even with zero frame ticks remaining.
++      // Wait for the queued/current frames AND the ISR's pending step bits.
++      if (done && !cancelled && ftMotion.cfg.active
++        && (ftMotion.stepping.is_busy() || bool(ftMotion.stepping.step_bits))) return false;
++    #endif
++    phase = done && !cancelled ? Phase::CompletePending : Phase::AbortPending;
++    return true; // No serial, clock reads, or waits here: standard motion calls from ISR.
++  }
++
++  #if ENABLED(PINPUT_RESONANCE_PROGRESS)
++    // Some serial wrappers don't expose TX capacity. Skip rather than block.
++    template <typename Serial> static auto tx_free(Serial &serial, int) -> decltype(serial.availableForWrite()) {
++      return serial.availableForWrite();
++    }
++    template <typename Serial> static int tx_free(Serial&, ...) { return 0; }
++  #endif
++
++  void idle() {
++    if (reporting) return;
++    if (phase == Phase::Idle) {
++      EmergencyParser::rt_stop_by_M496 = false; // Don't carry an idle M496 into a later session.
++      return;
++    }
++    if (EmergencyParser::rt_stop_by_M496) cancel();
++    if ((phase == Phase::WaitingArm || phase == Phase::ArmAccepted) && !arm_valid()) return;
++    if (phase == Phase::Exciting && !marlin.isRunning()) {
++      failed = true;
++      cancel();
++    }
++    if (phase == Phase::CompletePending) terminal(F("COMPLETE"));
++    else if (phase == Phase::AbortPending) terminal(F("ABORTED"));
++    #if ENABLED(PINPUT_RESONANCE_PROGRESS)
++      else if (phase == Phase::Exciting) {
++        if (ELAPSED(millis(), next_progress_ms)) {
++          next_progress_ms = millis() + 1000;
++          #if HAS_MULTI_SERIAL
++            PORT_REDIRECT(session_port);
++          #endif
++          if (tx_free(SERIAL_IMPL, 0) >= 48) { // Maximum line is 43 bytes (including LF).
++            REMEMBER(report, reporting, true);
++            SERIAL_ECHO_START();
++            SERIAL_ECHO(F("PIS:RT:PROGRESS:"), session_id, C(':'));
++            SERIAL_ECHO(p_float_t(rtg.host_frequency(), 2));
++            SERIAL_EOL();
++          }
++        }
++      }
++    #endif
++  }
++
++} // namespace resonance_host_events
++
++#endif // PINPUT_RESONANCE_EVENTS
+diff --git a/Marlin/src/feature/resonance/resonance_host_events.h b/Marlin/src/feature/resonance/resonance_host_events.h
+new file mode 100644
+--- /dev/null
++++ b/Marlin/src/feature/resonance/resonance_host_events.h
+@@ -0,0 +1,39 @@
++/**
++ * Marlin 3D Printer Firmware
++ * Copyright (c) 2026 MarlinFirmware [https://github.com/MarlinFirmware/Marlin]
++ *
++ * Based on Sprinter and grbl.
++ * Copyright (c) 2011 Camiel Gubbels / Erik van der Zalm
++ *
++ * This program is free software: you can redistribute it and/or modify
++ * it under the terms of the GNU General Public License as published by
++ * the Free Software Foundation, either version 3 of the License, or
++ * (at your option) any later version.
++ *
++ * This program is distributed in the hope that it will be useful,
++ * but WITHOUT ANY WARRANTY; without even the implied warranty of
++ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
++ * GNU General Public License for more details.
++ *
++ * You should have received a copy of the GNU General Public License
++ * along with this program.  If not, see <https://www.gnu.org/licenses/>.
++ *
++ */
++#pragma once
++
++#include "../../inc/MarlinConfigPre.h"
++
++#if ENABLED(PINPUT_RESONANCE_EVENTS)
++  namespace resonance_host_events {
++    bool command();                  // True if M495 has been handled / rejected
++    bool cancel();                   // True if an instrumented M496 was handled
++    bool stop_requested();           // ISR-safe standard-motion block-boundary cancellation
++    bool prepared();                 // Check homing / cancellation before proceeding
++    bool reject_command();           // Dispatch guard while the prepared sweep waits
++    void homed();                    // Main context, successful native G28 returned
++    bool wait_for_arm();             // Enter the nonblocking host-arming barrier
++    bool exciting();                 // Main context, after sweep initialization
++    bool stopping(const bool done);  // ISR-safe; false while final FT frames drain
++    void idle();                     // Deferred events, emergency stop, and arming deadline
++  }
++#endif
+diff --git a/Marlin/src/gcode/feature/resonance/M495_M496.cpp b/Marlin/src/gcode/feature/resonance/M495_M496.cpp
+--- a/Marlin/src/gcode/feature/resonance/M495_M496.cpp
++++ b/Marlin/src/gcode/feature/resonance/M495_M496.cpp
+@@ -27,6 +27,7 @@
+ #include "../../gcode.h"
+ #include "../../../lcd/marlinui.h"
+ #include "../../../feature/resonance/resonance_generator.h"
++#include "../../../feature/resonance/resonance_host_events.h"
+ 
+ void say_resonance_test() {
+   const resonance_test_params_t &p = rtg.rt_params;
+@@ -46,6 +47,10 @@
+  *   A<accel/Hz>   Accel per Hz. (Default 60)
+  *   F<Hz>         Start frequency. (Default 5.0)
+  *   S             Start the test.
++ *   I<uint32>     Instrumented session (PINPUT_RESONANCE_EVENTS).
++ *   W             With I and S, wait for host arming after preparation (PIS v2).
++ *   R             With I only, authorize the prepared session (PIS v2).
++ *   Q / Q2        Query PIS v1 / host-arming v2 support without movement.
+  *   T<Hz>         End frequency. (Default 100.0f)
+  *   O<float>      Octave duration for logarithmic progression
+  *   C<int>        Amplitude correction factor. (Default 5)
+@@ -61,6 +66,9 @@
+  *
+  */
+ void GcodeSuite::M495() {
++  // PINPUT_RESONANCE_EVENTS: custom host synchronization hook
++  if (TERN0(PINPUT_RESONANCE_EVENTS, resonance_host_events::command())) return;
++
+   if (!parser.seen_any()) return say_resonance_test();
+ 
+   resonance_test_params_t &p = rtg.rt_params;
+@@ -165,6 +173,12 @@
+  * M496: Abort the resonance test (via Emergency Parser)
+  */
+ void GcodeSuite::M496() {
++  // PINPUT_RESONANCE_EVENTS: custom host synchronization hook
++  if (TERN0(PINPUT_RESONANCE_EVENTS, resonance_host_events::cancel())) {
++    ui.refresh();
++    return;
++  }
++
+   if (rtg.isActive()) {
+       rtg.abort();
+       EmergencyParser::rt_stop_by_M496 = false;
+diff --git a/Marlin/src/gcode/gcode.cpp b/Marlin/src/gcode/gcode.cpp
+--- a/Marlin/src/gcode/gcode.cpp
++++ b/Marlin/src/gcode/gcode.cpp
+@@ -35,6 +35,10 @@
+ #include "parser.h"
+ #include "queue.h"
+ #include "../module/motion.h"
++
++#if ENABLED(PINPUT_RESONANCE_EVENTS)
++  #include "../feature/resonance/resonance_host_events.h"
++#endif
+ 
+ #if ENABLED(PRINTCOUNTER)
+   #include "../module/printcounter.h"
+@@ -348,6 +352,12 @@
+       return;
+     }
+   #endif
++
++  // Keep the native host-armed position/configuration stable until authorization.
++  if (TERN0(PINPUT_RESONANCE_EVENTS, resonance_host_events::reject_command())) {
++    if (!no_ok) queue.ok_to_send();
++    return;
++  }
+ 
+   // Handle a known command or reply "unknown command"
+ 
+diff --git a/Marlin/src/inc/SanityCheck.h b/Marlin/src/inc/SanityCheck.h
+--- a/Marlin/src/inc/SanityCheck.h
++++ b/Marlin/src/inc/SanityCheck.h
+@@ -4932,6 +4932,14 @@
+   #endif
+ #endif
+ 
++#if ENABLED(PINPUT_RESONANCE_EVENTS) && DISABLED(RESONANCE_TEST)
++  #error "PINPUT_RESONANCE_EVENTS requires RESONANCE_TEST."
++#endif
++
++#if ENABLED(PINPUT_RESONANCE_PROGRESS) && DISABLED(PINPUT_RESONANCE_EVENTS)
++  #error "PINPUT_RESONANCE_PROGRESS requires PINPUT_RESONANCE_EVENTS."
++#endif
++
+ // Multi-Stepping Limit
+ static_assert(WITHIN(MULTISTEPPING_LIMIT, 1, 128) && IS_POWER_OF_2(MULTISTEPPING_LIMIT), "MULTISTEPPING_LIMIT must be 1, 2, 4, 8, 16, 32, 64, or 128.");
+ 
+diff --git a/buildroot/tests/resonance_host_events/mock_marlin.h b/buildroot/tests/resonance_host_events/mock_marlin.h
+new file mode 100644
+--- /dev/null
++++ b/buildroot/tests/resonance_host_events/mock_marlin.h
+@@ -0,0 +1,195 @@
++// Host-only mocks. The compiled handler, generator, and protocol are production sources.
++#pragma once
++#include <cassert>
++#include <cmath>
++#include <cstdint>
++#include <cstdlib>
++#include <cstring>
++#include <functional>
++#include <iomanip>
++#include <sstream>
++#include <string>
++#include <vector>
++
++#define RESONANCE_TEST 1
++#define HAS_STANDARD_MOTION 1
++#define HAS_FTM_DIR_CHANGE_HOLD 0
++#define GCODE_CASE_INSENSITIVE 1
++#define MARLIN_SMALL_BUILD 0
++#define ENABLED(V) V
++#define DISABLED(V) (!(V))
++#define JOIN_(A,B) A##B
++#define JOIN(A,B) JOIN_(A,B)
++#define TERN0_0(...) false
++#define TERN0_1(...) __VA_ARGS__
++#define TERN0(C,...) JOIN(TERN0_,C)(__VA_ARGS__)
++#define TERN1_0(...) true
++#define TERN1_1(...) __VA_ARGS__
++#define TERN1(C,...) JOIN(TERN1_,C)(__VA_ARGS__)
++#define TERN__0(...)
++#define TERN__1(...) __VA_ARGS__
++#define TERN_(C,...) JOIN(TERN__,C)(__VA_ARGS__)
++#define WITHIN(V,L,H) ((V)>=(L) && (V)<=(H))
++#define NUMERIC(C) WITHIN(C,'0','9')
++#define NOMORE(V,M) do { if ((V)>(M)) (V)=(M); } while (0)
++#define _MAX(A,B) ((A)>(B)?(A):(B))
++#define sq(V) ((V)*(V))
++#define F(V) (V)
++#define C(V) char(V)
++#define AXIS_CHAR(A) ("XYZE"[A])
++#define LOOP_NUM_AXES(A) for (uint8_t A=0; A<3; ++A)
++#define X_CENTER 100.0f
++#define Y_CENTER 100.0f
++#define Z_CLEARANCE_FOR_HOMING 10.0f
++using std::isfinite;
++using std::abs;
++using FSTR_P = const char*;
++using millis_t = uint32_t;
++extern millis_t now_ms;
++inline millis_t millis() { return now_ms; }
++#define ELAPSED(N,T) (int32_t((N)-(T))>=0)
++template<class T> struct Remember { T &ref; T old; Remember(T &r,T v):ref(r),old(r){r=v;} ~Remember(){ref=old;} };
++#define REMEMBER(N,R,V) Remember<decltype(R)> N(R,V)
++
++struct SerialMask {
++  int mask;
++  enum { All = 255 };
++  SerialMask(int m): mask(m) {}
++  bool enabled(SerialMask other) const { return mask & other.mask; }
++};
++struct MockSerial {
++  int free = 64;
++  int availableForWrite() { return free; }
++};
++struct MultiSerial { SerialMask portMask = SerialMask::All; }; // No TX capacity API
++extern MockSerial singleSerial;
++extern MultiSerial multiSerial;
++#if HAS_MULTI_SERIAL
++  #define SERIAL_IMPL multiSerial
++  #define PORT_REDIRECT(P) REMEMBER(port, multiSerial.portMask, P)
++#else
++  #define SERIAL_IMPL singleSerial
++#endif
++extern std::string output;
++extern std::vector<int> output_ports;
++template<class T> void serial_one(T value) {
++  std::ostringstream s; s << value; output += s.str();
++  output_ports.push_back(multiSerial.portMask.mask);
++}
++struct p_float_t {
++  float value; int digits;
++  p_float_t(float v, int d): value(v), digits(d) {}
++};
++inline void SERIAL_CHAR(char c) {serial_one(c);}
++inline void serial_one(p_float_t value) {
++  float v=value.value; int digits=value.digits;
++  std::ostringstream s; s << std::fixed << std::setprecision(digits) << v; serial_one(s.str());
++}
++
++inline void SERIAL_ECHO_START() { serial_one("echo:"); }
++extern std::function<void()> serial_hook;
++inline void SERIAL_EOL() { serial_one('\n'); if (serial_hook) serial_hook(); }
++inline void SERIAL_ECHO() {}
++template<class T,class... Rest> void SERIAL_ECHO(T v,Rest... rest) { serial_one(v); SERIAL_ECHO(rest...); }
++template<class... Args> void SERIAL_ECHOLN(Args... args) { SERIAL_ECHO(args...); SERIAL_EOL(); }
++#define SERIAL_ECHOLNPGM(...) SERIAL_ECHOLN(__VA_ARGS__)
++#define SERIAL_ERROR_MSG(V) SERIAL_ECHOLN("Error:",V)
++
++enum AxisEnum { NO_AXIS_ENUM=-1, X_AXIS, Y_AXIS, Z_AXIS, E_AXIS };
++struct xyze_pos_t {
++  float data[4]{};
++  float &operator[](int i) { assert(i>=0 && i<4); return data[i]; }
++  const float &operator[](int i) const { assert(i>=0 && i<4); return data[i]; }
++};
++using xyze_float_t = xyze_pos_t;
++struct block_t {
++  uint32_t initial_rate=0, step_event_count=0, direction_bits=0, steps[4]{};
++  void reset() { *this=block_t(); }
++};
++struct Planner {
++  bool queued=false;
++  bool has_blocks_queued() { return queued; }
++  struct { float axis_steps_per_mm[4]={80,80,400,100}; } settings; };
++extern Planner planner;
++struct Motion {
++  xyze_pos_t position;
++  bool trusted = true;
++  int position_calls = 0;
++  std::function<void()> positioning;
++  bool all_axes_trusted() { return trusted; }
++  void blocking_move_xy(float x,float y,float) {
++    ++position_calls;
++    if (positioning) positioning();
++    position[0]=x; position[1]=y;
++  }
++};
++extern Motion motion;
++struct Marlin { bool running=true; bool isRunning() {return running;} };
++extern Marlin marlin;
++struct Stepper {
++  bool awake=true;
++  bool suspend(){bool prev=awake;awake=false;return prev;}
++  void wake_up(){awake=true;}
++};
++extern Stepper stepper;
++struct EmergencyParser { static bool rt_stop_by_M496; };
++struct UI { void refresh() {} };
++extern UI ui;
++struct FTMotion {
++  struct { bool active=FT_MOTION; } cfg;
++  struct {
++    int frames=0;
++    bool current=false, step_bits=false;
++    bool is_full() {return frames>=4;}
++    bool is_busy() {return frames || current;}
++  } stepping;
++  int resets=0;
++  void reset(){++resets;stepping.frames=0;stepping.current=false;stepping.step_bits=false;}
++  void stepping_enqueue(xyze_pos_t) {++stepping.frames;}
++};
++extern FTMotion ftMotion;
++
++struct Parser {
++  std::vector<char> storage;
++  char command_letter='M';
++  uint16_t codenum=495;
++  char *command_ptr=nullptr, *value=nullptr;
++  char *values[26]{};
++  bool flags[26]{};
++  void parse(const char *text) {
++    storage.assign(text,text+strlen(text)+1);
++    command_ptr=storage.data(); value=nullptr;
++    memset(values,0,sizeof(values)); memset(flags,0,sizeof(flags));
++    command_letter=*command_ptr;
++    char *p;
++    codenum=strtoul(command_ptr+1,&p,10);
++    while (*p) {
++      char c=*p++;
++      if (c>='a' && c<='z') c+='A'-'a';
++      if (c<'A' || c>'Z') continue;
++      while (*p==' ') ++p;
++      flags[c-'A']=true;
++      if (NUMERIC(*p) || *p=='-' || *p=='+' || *p=='.') {
++        values[c-'A']=p;
++        while (NUMERIC(*p) || *p=='-' || *p=='+' || *p=='.') ++p;
++      }
++    }
++  }
++  bool seen_test(char c) { return flags[c-'A']; }
++  bool seen(char c) { if (!seen_test(c)) return false; value=values[c-'A']; return true; }
++  bool has_value() { return value; }
++  bool seenval(char c) { return seen(c) && has_value(); }
++  bool seen_any() { for (bool f:flags) if(f)return true; return false; }
++  char *value_string() {return value;}
++  float value_float() {return value?strtof(value,nullptr):0;}
++  int value_int() {return int(value_float());}
++};
++extern Parser parser;
++struct GcodeSuite {
++  int homes=0;
++  std::function<void()> homing;
++  void home_all_axes() {++homes;if(homing)homing();}
++  static void M495();
++  static void M496();
++};
++extern GcodeSuite gcode;
+diff --git a/buildroot/tests/resonance_host_events/test_protocol.cpp b/buildroot/tests/resonance_host_events/test_protocol.cpp
+new file mode 100644
+--- /dev/null
++++ b/buildroot/tests/resonance_host_events/test_protocol.cpp
+@@ -0,0 +1,331 @@
++// Host lifecycle tests: no hardware operations occur in this executable.
++#include "mock_marlin.h"
++#include "feature/resonance/resonance_generator.h"
++#include "feature/resonance/resonance_host_events.h"
++
++#ifndef TEST_STANDARD
++  #define TEST_STANDARD 0
++#endif
++#define TEST_FTM_ACTIVE (FT_MOTION && !TEST_STANDARD)
++
++millis_t now_ms=0;
++MockSerial singleSerial;
++MultiSerial multiSerial;
++std::string output;
++std::function<void()> serial_hook;
++std::vector<int> output_ports;
++Planner planner;
++Motion motion;
++Marlin marlin;
++Stepper stepper;
++FTMotion ftMotion;
++UI ui;
++Parser parser;
++GcodeSuite gcode;
++bool EmergencyParser::rt_stop_by_M496=false;
++
++static void command(const char *line) {
++  parser.parse(line);
++  if (TERN0(PINPUT_RESONANCE_EVENTS, resonance_host_events::reject_command())) return;
++  GcodeSuite::M495();
++}
++static void clear_output() { output.clear(); output_ports.clear(); }
++static size_t count(const char *str) {
++  size_t n=0, pos=0;
++  while ((pos=output.find(str,pos))!=std::string::npos) {++n;pos+=strlen(str);}
++  return n;
++}
++static void poll() { TERN_(PINPUT_RESONANCE_EVENTS, resonance_host_events::idle()); }
++#if PINPUT_RESONANCE_EVENTS
++static void finish_cancel() {
++  #if !TEST_FTM_ACTIVE && PINPUT_RESONANCE_EVENTS
++    // Model the ISR reaching the next block boundary after its last pulse.
++    if (rtg.isActive() && resonance_host_events::stop_requested()) {
++      assert(rtg.generate_resonance_block()==nullptr);
++      rtg.abort();
++    }
++  #endif
++  poll();
++}
++#endif
++static void exhaust() {
++  // Emulate the native consumers: the standard ISR calls abort after nullptr;
++  // FTMotion::loop calls abort on its next pass after done. No serial in either.
++  #if TEST_FTM_ACTIVE
++    ftMotion.stepping.current=true; // Model the last dequeued frame still executing.
++    while (!rtg.isDone()) {
++      ftMotion.stepping.frames=0;
++      rtg.fill_stepper_plan_buffer();
++    }
++  #else
++    while (rtg.generate_resonance_block()) {}
++  #endif
++  rtg.abort();
++}
++
++int main() {
++  ftMotion.cfg.active=TEST_FTM_ACTIVE;
++  // No unsolicited startup events; ordinary report / M496 never home or move.
++  poll(); assert(output.empty());
++  command("M495"); GcodeSuite::M496();
++  assert(!gcode.homes && !motion.position_calls && !count("PIS:RT"));
++  clear_output();
++
++  #if PINPUT_RESONANCE_EVENTS
++    // A capability query is read-only, including an accidentally appended S.
++    const float old_freq=rtg.rt_params.min_freq;
++    command("M495 Q");
++    assert(output=="echo:PIS:RT:READY:1\n");
++    command("M495 Q X S I22 F30");
++    assert(count("ERROR:0:INVALID_PARAMETERS")==1);
++    assert(!gcode.homes && !motion.position_calls && !rtg.isActive());
++    assert(rtg.rt_params.min_freq==old_freq);
++
++    const char *bad_ids[]={"M495 X S I", "M495 X S I0", "M495 X S I01",
++      "M495 X S I-1", "M495 X S I+1", "M495 X S I1.0", "M495 X S I1e2",
++      "M495 X S I4294967296", "M495 X S I99999999999999999999999999",
++      "M495 X S I1 I2", "M495 X S I1X", "M495 X S I 1", "M495 X S I\"1\""};
++    for (const char *line:bad_ids) {
++      clear_output();command(line);
++      assert(output=="echo:PIS:RT:ERROR:0:INVALID_SESSION_ID\n");
++      assert(!rtg.isActive() && !gcode.homes);
++    }
++    const char *bad_parameters[]={"M495 X I10", "M495 X Y S I10", "M495 S I10",
++      "M495 X S I10 F4", "M495 X S I10 F40 T30", "M495 X S I10 T201",
++      "M495 X S I10 O19", "M495 X S I10 O61", "M495 X S I10 A-1",
++      "M495 X S I10 A99999999999999999999999999999999999999999999999999",
++      "M495 X S I10 C1.5", "M495 X S I10 C9", "M495 X S I10 F",
++      "M495 X S I10 F20.3.4", "M495 X S I10 G10"};
++    for (const char *line:bad_parameters) {
++      clear_output();command(line);
++      assert(output=="echo:PIS:RT:ERROR:10:INVALID_PARAMETERS\n");
++      assert(!rtg.isActive() && !gcode.homes);
++    }
++
++    // An M496 received with no session cannot poison a later accepted request.
++    EmergencyParser::rt_stop_by_M496=true;
++    poll();assert(!EmergencyParser::rt_stop_by_M496);
++
++    // Capture exact ordering: neither blocking preparation stage can see START.
++    clear_output();
++    gcode.homing=[] { assert(!count("PIS:RT:START")); };
++    motion.positioning=[] { assert(!count("PIS:RT:START")); };
++    multiSerial.portMask=SerialMask(2);
++    command("M495 X F20 T20.1 O20 A40 I4294967295 S");
++    assert(rtg.isActive() && gcode.homes==1 && motion.position_calls==1);
++    assert(count("echo:PIS:RT:START:4294967295:X:20.00:20.10\n")==1);
++    const auto before_busy=rtg.rt_params;
++    command("M495 Y F30 I4294967295 S");
++    assert(count("Error:TEST_BUSY")==1 && !count("PIS:RT:ERROR:4294967295:"));
++    command("M495 Y F30 I33 S");
++    assert(count("ERROR:33:TEST_BUSY")==1);
++    command("M495 Y F30");
++    assert(rtg.rt_params.axis==before_busy.axis && rtg.rt_params.min_freq==before_busy.min_freq);
++    assert(gcode.homes==1);
++    gcode.homing=nullptr;motion.positioning=nullptr;
++    clear_output();
++    multiSerial.portMask=SerialMask(4);
++    exhaust();
++    assert(!count("PIS:RT")); // abort hook never prints, even at natural exhaustion
++    #if TEST_FTM_ACTIVE
++      assert(rtg.isActive());
++      poll();assert(!count("COMPLETE"));
++      ftMotion.stepping.frames=0;ftMotion.stepping.current=true;
++      rtg.abort();poll();assert(rtg.isActive() && !count("COMPLETE"));
++      ftMotion.stepping.current=false;
++      ftMotion.stepping.step_bits=true; // Final pulse may be scheduled at frame end.
++      rtg.abort();poll();assert(rtg.isActive() && !count("COMPLETE"));
++      ftMotion.stepping.step_bits=false;
++      rtg.abort();
++    #endif
++    assert(!rtg.isActive());
++    poll();poll();GcodeSuite::M496();poll();
++    assert(count("echo:PIS:RT:COMPLETE:4294967295\n")==1);
++    assert(!count("ABORTED"));
++    #if HAS_MULTI_SERIAL
++      // Event output returns to its originating port and restores the caller's.
++      assert(output_ports[0]==2 && multiSerial.portMask.mask==4);
++    #endif
++
++    // Repeated sessions, emergency cancellation, direct cancellation, no duplicates.
++    for (int i=1;i<=3;++i) {
++      clear_output();command("M495 Y F20 T20.1 O20 A40 I123 S");
++      assert(rtg.isActive() && count("START:123:Y")==1);
++      if (i==1) {EmergencyParser::rt_stop_by_M496=true;poll();}
++      else {GcodeSuite::M496();GcodeSuite::M496();poll();}
++      #if !TEST_FTM_ACTIVE
++        assert(rtg.isActive() && !count("ABORTED"));
++      #endif
++      finish_cancel();
++      assert(!rtg.isActive() && !EmergencyParser::rt_stop_by_M496);
++      poll();assert(count("ABORTED:123")==1 && !count("COMPLETE"));
++    }
++
++    // Cancel after generating the final point but before the FT buffer drains.
++    #if TEST_FTM_ACTIVE
++      clear_output();command("M495 X F20 T20.1 I21 S");exhaust();
++      assert(rtg.isActive() && rtg.isDone());
++      GcodeSuite::M496();poll();
++      assert(count("ABORTED:21")==1 && !count("COMPLETE"));
++      assert(!rtg.isActive() && !ftMotion.stepping.is_busy());
++    #endif
++
++    // Preparation cancellation waits for synchronous homing / positioning return.
++    clear_output();
++    const int old_positions=motion.position_calls;
++    gcode.homing=[] {
++      EmergencyParser::rt_stop_by_M496=true;poll();
++      assert(!count("ABORTED") && !count("START"));
++    };
++    command("M495 X F20 T20.1 I45 S");
++    assert(count("ABORTED:45")==1 && !count("START") && !rtg.isActive());
++    assert(motion.position_calls==old_positions);
++    gcode.homing=nullptr;
++    clear_output();
++    motion.positioning=[] {EmergencyParser::rt_stop_by_M496=true;poll();assert(!count("ABORTED"));};
++    command("M495 X F20 T20.1 I46 S");
++    assert(count("ABORTED:46")==1 && !count("START") && !rtg.isActive());
++    motion.positioning=nullptr;
++
++    // Real observable failures: untrusted axes after G28, and a recoverable stop.
++    clear_output();motion.trusted=false;
++    command("M495 X F20 T20.1 I50 S");
++    assert(count("ERROR:50:AXIS_NOT_HOMED")==1 && !count("START") && !rtg.isActive());
++    motion.trusted=true;marlin.running=false;clear_output();
++    command("M495 X F20 T20.1 I51 S");
++    assert(count("ERROR:51:MOTION_FAILED")==1 && !count("START") && !rtg.isActive());
++    marlin.running=true;clear_output();command("M495 X F20 T20.1 I52 S");
++    marlin.running=false;poll();finish_cancel();poll();
++    assert(count("ERROR:52:MOTION_FAILED")==1 && !count("COMPLETE") && !count("ABORTED"));
++    marlin.running=true;
++
++    // v2 negotiation does not change Q or any v1 lifecycle.
++    clear_output();command("M495 Q2");
++    assert(output=="echo:PIS:RT:READY:2\n");
++    for (const char *query : {"M495 Q3", "M495 Q2 S", "M495 Q2.0", "M495 Q02"}) {
++      clear_output();command(query);assert(count("ERROR:0:INVALID_PARAMETERS")==1);
++    }
++    for (const char *bad : {"M495 X S W", "M495 X S W1 I70", "M495 I70 R S", "M495 I70 R1"}) {
++      clear_output();const int homes=gcode.homes;command(bad);
++      assert(!rtg.isActive() && gcode.homes==homes && !count("ARM_ACK"));
++    }
++
++    // Preparation can take longer than 30 s: the arming deadline starts AFTER it.
++    clear_output();now_ms=100;
++    gcode.homing=[] {now_ms+=60000;assert(!count("ARMED_WAIT") && !count("START"));};
++    motion.positioning=[] {now_ms+=60000;assert(!count("ARMED_WAIT") && !count("START"));};
++    multiSerial.portMask=SerialMask(2);
++    command("M495 X F20 T20.1 O20 A40 I70 S W");
++    assert(!rtg.isActive() && count("HOMED:70:60100")==1 && count("ARMED_WAIT:70")==1);
++    gcode.homing=nullptr;motion.positioning=nullptr;
++    const auto prepared_params=rtg.rt_params;
++    for (const char *conflict : {"G1 X30", "G28", "G92 X0", "M84", "M493 S0", "M501", "T0"}) {
++      parser.parse(conflict);assert(resonance_host_events::reject_command());
++      assert(!rtg.isActive() && rtg.rt_params.min_freq==prepared_params.min_freq);
++    }
++    for (const char *status : {"M105", "M114", "M118 fence", "M496", "M495 Q2"}) {
++      parser.parse(status);assert(!resonance_host_events::reject_command());
++    }
++    clear_output();command("M495 I71 R");
++    assert(count("ARM_REJECTED:71:SESSION_MISMATCH")==1 && !count("ARM_ACK") && !rtg.isActive());
++    #if HAS_MULTI_SERIAL
++      multiSerial.portMask=SerialMask(4);command("M495 I70 R");
++      assert(count("ARM_REJECTED:70:PORT_MISMATCH")==1 && !count("ARM_ACK") && !rtg.isActive());
++      multiSerial.portMask=SerialMask(2);
++    #endif
++    now_ms+=29000;poll();assert(!rtg.isActive() && !count("ARM_TIMEOUT"));
++    clear_output();command("M495 I70 R");
++    assert(rtg.isActive() && count("ARM_ACK:70")==1 && count("START:70:")==1);
++    assert(output.find("ARM_ACK:70")<output.find("START:70:"));
++    command("M495 I70 R");
++    assert(count("ARM_ACK:70")==2 && count("START:70:")==1);
++    GcodeSuite::M496();finish_cancel();
++    assert(count("ABORTED:70")==1);
++    clear_output();command("M495 I70 R");
++    assert(!rtg.isActive() && !count("ARM_ACK") && !count("START"));
++
++    // Full v2 completion preserves the existing standard/FT terminal drain rules.
++    command("M495 X F20 T20.1 O20 A40 I71 S W");command("M495 I71 R");
++    assert(rtg.isActive());exhaust();
++    #if TEST_FTM_ACTIVE
++      ftMotion.stepping.frames=0;ftMotion.stepping.current=false;ftMotion.stepping.step_bits=false;rtg.abort();
++    #endif
++    poll();assert(!rtg.isActive() && count("COMPLETE:71")==1);
++
++    // Late ARM cannot race a deadline that idle() has not checked yet, including wrap.
++    for (const millis_t begin : {millis_t(100), millis_t(UINT32_MAX-20000)}) {
++      clear_output();now_ms=begin;command("M495 X F20 T20.1 I72 S W");
++      now_ms+=30000;command("M495 I72 R");
++      assert(count("ERROR:72:ARM_TIMEOUT")==1 && !count("ARM_ACK") && !count("START") && !rtg.isActive());
++      poll();command("M495 I72 R");assert(count("ERROR:72:ARM_TIMEOUT")==1 && !rtg.isActive());
++    }
++    clear_output();command("M495 X F20 T20.1 I73 S W");now_ms+=30000;poll();poll();
++    assert(count("ERROR:73:ARM_TIMEOUT")==1 && !count("START") && !rtg.isActive());
++
++    // Every prerequisite is validated BEFORE authorization is acknowledged.
++    for (int failure=0;failure<6;++failure) {
++      clear_output();command("M495 X F20 T20.1 I74 S W");
++      if (failure==0) EmergencyParser::rt_stop_by_M496=true;
++      if (failure==1) marlin.running=false;
++      if (failure==2) motion.trusted=false;
++      if (failure==3) planner.queued=true;
++      if (failure==4) motion.position[0]+=1;
++      if (failure==5) {GcodeSuite::M496();GcodeSuite::M496();}
++      command("M495 I74 R");
++      assert(!count("ARM_ACK") && !count("START") && !rtg.isActive());
++      assert(count("ABORTED:74")+count("ERROR:74:")==1);
++      marlin.running=true;motion.trusted=true;planner.queued=false;
++    }
++    // An emergency arriving during ACK/START serial emission still wins activation.
++    for (const char *boundary : {"ARM_ACK:75", "START:75:"}) {
++      clear_output();command("M495 X F20 T20.1 I75 S W");
++      serial_hook=[boundary] {if (output.find(boundary)!=std::string::npos) EmergencyParser::rt_stop_by_M496=true;};
++      command("M495 I75 R");serial_hook=nullptr;poll();
++      assert(!rtg.isActive() && count("ABORTED:75")==1 && !count("COMPLETE"));
++    }
++    // A direct UI cancellation may run inside a serial helper's nested idle.
++    for (const char *boundary : {"ARM_ACK:76", "START:76:"}) {
++      clear_output();command("M495 X F20 T20.1 I76 S W");
++      bool cancelled_in_output=false;
++      serial_hook=[boundary, &cancelled_in_output] {
++        if (!cancelled_in_output && output.find(boundary)!=std::string::npos) {
++          cancelled_in_output=true;
++          GcodeSuite::M496();
++        }
++      };
++      command("M495 I76 R");serial_hook=nullptr;poll();
++      assert(!rtg.isActive() && count("ABORTED:76")==1 && !count("COMPLETE"));
++    }
++    // A reset/reconnect cannot revive a terminated authorization.
++    clear_output();command("M495 I75 R");assert(!count("START") && !rtg.isActive());
++
++    #if PINPUT_RESONANCE_PROGRESS
++      clear_output();now_ms=100;
++      command("M495 X F20 T21 I60 S");
++      poll();assert(!count("PROGRESS"));
++      now_ms=1100;singleSerial.free=0;poll();assert(!count("PROGRESS"));
++      now_ms=2100;singleSerial.free=64;poll();
++      #if HAS_MULTI_SERIAL
++        assert(!count("PROGRESS")); // Wrapper has no capacity API: skip safely.
++      #else
++        assert(count("PROGRESS:60:20.00")==1);
++        poll();assert(count("PROGRESS")==1);
++      #endif
++      GcodeSuite::M496();poll();
++      const size_t progress_count=count("PROGRESS");
++      now_ms+=5000;poll();assert(count("PROGRESS")==progress_count);
++    #endif
++  #endif
++
++  // Existing non-instrumented commands retain their native semantics in all builds.
++  clear_output();command("M495 X F20 T20.1 O20 A40 S");
++  assert(rtg.isActive() && !count("PIS:RT"));
++  exhaust();
++  assert(!rtg.isActive()); // Legacy FT still resets immediately, even if buffered.
++  poll();GcodeSuite::M496();assert(!count("PIS:RT"));
++  command("M495 X F20 T60 O20 A40 S");
++  assert(rtg.isActive());GcodeSuite::M496();assert(!rtg.isActive() && !count("PIS:RT"));
++  #if !PINPUT_RESONANCE_EVENTS
++    clear_output();command("M495 Q");assert(!count("PIS:RT") && !rtg.isActive());
++  #endif
++}
+diff --git a/buildroot/tests/resonance_host_events/test_protocol.py b/buildroot/tests/resonance_host_events/test_protocol.py
+new file mode 100644
+--- /dev/null
++++ b/buildroot/tests/resonance_host_events/test_protocol.py
+@@ -0,0 +1,58 @@
++#!/usr/bin/env python3
++"""Compile the real M495 handler, generator and event extension against motion mocks.
++
++Run from any directory: python3 buildroot/tests/resonance_host_events/test_protocol.py
++No PlatformIO, hardware, motors, or external Python packages are needed.
++"""
++from pathlib import Path
++import shutil
++import subprocess
++import tempfile
++
++HERE = Path(__file__).resolve().parent
++ROOT = HERE.parents[2]
++SOURCES = [
++    "feature/resonance/resonance_generator.h",
++    "feature/resonance/resonance_generator.cpp",
++    "feature/resonance/resonance_host_events.h",
++    "feature/resonance/resonance_host_events.cpp",
++    "gcode/feature/resonance/M495_M496.cpp",
++]
++STUBS = ["inc/MarlinConfig.h", "inc/MarlinConfigPre.h", "core/types.h",
++         "MarlinCore.h", "gcode/gcode.h", "lcd/marlinui.h",
++         "module/planner.h", "module/stepper.h", "module/ft_motion.h"]
++
++
++def main():
++    dispatch = (ROOT / "Marlin/src/gcode/gcode.cpp").read_text()
++    assert dispatch.index("resonance_host_events::reject_command()") < dispatch.index("switch (parser.command_letter)", dispatch.index("void GcodeSuite::process_parsed_command"))
++    with tempfile.TemporaryDirectory(prefix="marlin-resonance-test-") as tmp:
++        tmp = Path(tmp)
++        for name in SOURCES:
++            dest = tmp / name
++            dest.parent.mkdir(parents=True, exist_ok=True)
++            shutil.copyfile(ROOT / "Marlin/src" / name, dest)
++        shutil.copyfile(HERE / "mock_marlin.h", tmp / "mock_marlin.h")
++        shutil.copyfile(HERE / "test_protocol.cpp", tmp / "test_protocol.cpp")
++        for name in STUBS:
++            dest = tmp / name
++            dest.parent.mkdir(parents=True, exist_ok=True)
++            dest.write_text('#pragma once\n#include "mock_marlin.h"\n')
++        for enabled, ftm, progress, multi, standard in [
++            (0, 1, 0, 0, 0), (1, 0, 0, 0, 0), (1, 1, 0, 0, 0),
++            (1, 1, 1, 0, 0), (1, 1, 1, 1, 0), (1, 1, 0, 0, 1),
++        ]:
++            args = ["g++", "-std=c++11", "-Wall", "-Wextra", "-Werror", "-I", str(tmp),
++                    f"-DPINPUT_RESONANCE_EVENTS={enabled}", f"-DFT_MOTION={ftm}",
++                    f"-DPINPUT_RESONANCE_PROGRESS={progress}", f"-DHAS_MULTI_SERIAL={multi}",
++                    f"-DTEST_STANDARD={standard}",
++                    str(tmp / "test_protocol.cpp"),
++                    *(str(tmp / name) for name in SOURCES if name.endswith(".cpp")),
++                    "-o", str(tmp / "test")]
++            subprocess.run(args, check=True)
++            subprocess.run([str(tmp / "test")], check=True)
++            print(f"PASS: events={enabled}, ft_motion={ftm}, progress={progress}, multiserial={multi}, standard={standard}", flush=True)
++
++
++if __name__ == "__main__":
++    main()
+diff --git a/docs/resonance-host-events.md b/docs/resonance-host-events.md
+new file mode 100644
+--- /dev/null
++++ b/docs/resonance-host-events.md
+@@ -0,0 +1,42 @@
++# M495 PIS host events
++
++Enable RESONANCE_TEST, EMERGENCY_PARSER and PINPUT_RESONANCE_EVENTS in your
++own board configuration. PINPUT_RESONANCE_PROGRESS is optional. No option
++is enabled by applying this patch. RESONANCE_TEST requires a 32-bit CPU and
++an input-shaping configuration already supported by your Marlin version.
++
++M495 Q replies echo:PIS:RT:READY:1 without motion. M495 Q2 replies
++echo:PIS:RT:READY:2 without motion. Q1 is not an accepted command token.
++Both queries reject additional parameters. Existing uninstrumented M495
++and instrumented v1 sessions without W retain their previous behavior.
++
++For a v2 session, send M495 X F20 T60 O20 A40 I12345678 S W. The ID must be
++a canonical nonzero uint32. Marlin homes and positions without activating
++the generator, emits HOMED:<id>:<millis>, then ARMED_WAIT:<id>. The host
++starts its sensor and verifies fresh samples before sending M495 I12345678 R.
++ARM_ACK means the matching request was accepted; START precedes activation.
++All event lines have the echo:PIS:RT: prefix. COMPLETE is emitted only after
++the native motion buffers and pending FT step bits have drained.
++
++The 30-second ARM timeout starts on entry to WaitingArm. Missing or late ARM
++cannot start excitation. The dispatcher blocks conflicting commands while
++waiting. ID, port, timeout, cancellation, running/trusted-axis state and the
++prepared position/buffers are checked before authorization. M496 cancels
++preparation, waiting or excitation. Terminal responses are COMPLETE:<id>,
++ABORTED:<id> or ERROR:<id>:<reason>. A rejected ARM uses
++ARM_REJECTED:<id>:<reason>; it never starts a new sweep.
++
++Sensor failure after ARM requires M496 and a matching terminal response even
++if the host has not received START. UART cannot detect an instantaneous host
++disconnect after accepted ARM. No automatic restart is provided. Keep direct
++LCD/other-host actions from changing the machine during a measurement.
++
++No serial output or blocking host wait is added to the ISR. Native resonance
++equations and FT Motion internals are unchanged. Run the actual-source host
++harness with:
++
++```bash
++python3 buildroot/tests/resonance_host_events/test_protocol.py
++```
++
++Also compile and validate your board configuration before physical use.

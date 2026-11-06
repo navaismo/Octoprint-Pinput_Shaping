@@ -1,662 +1,575 @@
 $(function () {
-  function PinputShapingViewModel(parameters) {
-    const self = this;
+    "use strict";
 
-    self.settingsViewModel = parameters[0];
+    function PinputShapingViewModel(parameters) {
+        const self = this;
+        self.settingsViewModel = parameters[0];
+        self.printerState = parameters[1];
+        self.busy = ko.observable(false);
+        self.savingSettings = ko.observable(false);
+        self.stage = ko.observable("idle");
+        self.error = ko.observable("");
+        self.errorToastOpen = ko.observable(false);
+        self.view = ko.observable("setup");
+        self.chartTab = ko.observable("overview");
+        self.operation = ko.observable("");
+        self.progressPhase = ko.observable(-1);
+        self.protocolEvents = ko.observableArray([]);
+        self.protocolLoading = ko.observable(false);
+        self.fullscreenAvailable = typeof document !== "undefined" && !!document.documentElement.requestFullscreen;
+        self.summary = ko.observable("");
+        self.recoveryRequired = ko.observable(false);
+        self.modesReady = ko.observable(false);
+        self.firmware = ko.observable({state: "unknown", protocol: null, label: "Not detected",
+            allowed_shapers: [], message: "Click Detect firmware while the printer is connected and idle."});
+        self.result = ko.observable(null);
+        self.selectedShaper = ko.observable(null);
+        self.samples = ko.observableArray([]);
+        self.progress = ko.observable(0);
+        self.progressSource = ko.observable("");
+        self.sensorState = ko.observable("");
+        self.nativeCapability = ko.observable({state: "unknown", protocol: null,
+            message: "Click Detect M495 Support for this printer connection."});
+        self.diagnostics = ko.observable(null);
+        self.interactiveAvailable = ko.observable(typeof Plotly !== "undefined");
+        self.sizeX = ko.observable(220);
+        self.sizeY = ko.observable(220);
+        self.sizeZ = ko.observable(250);
+        self.selectedZ = ko.observable(10);
+        self.selectedCell = ko.observable({row: 1, col: 1});
+        self.grid = Array.from({length: 3}, (_, row) =>
+            Array.from({length: 3}, (_, col) => ({row: 2 - row, col: col})));
+        self.calculatedX = ko.pureComputed(() =>
+            Math.round((self.selectedCell().col + 0.5) * self.sizeX() / 3));
+        self.calculatedY = ko.pureComputed(() =>
+            Math.round((self.selectedCell().row + 0.5) * self.sizeY() / 3));
 
-    // Test status
-    self.samples = ko.observableArray([]);
-    self.summary = ko.observable("");
-    self.hasData = ko.observable(false);
-    self.error = ko.observable(null);
+        const settingKeys = ["accelMin", "accelMax", "freqStart", "freqEnd",
+            "sweepDuration", "dampingRatio", "sensorType", "sensorAxis", "sensorPort", "adxlRate", "lis2dwRate", "lis2dwRange",
+            "excitationBackend", "nativeStart", "nativeEnd", "nativeOctave", "nativeAccel",
+            "nativePrepareTimeout", "nativeMaxCapture", "nativeCancelTimeout"];
+        settingKeys.forEach(key => { self[key] = ko.observable(); });
 
-    // Settings
-    self.sizeX = ko.observable(0);
-    self.sizeY = ko.observable(0);
-    self.sizeZ = ko.observable(0);
-    self.accelMin = ko.observable(0);
-    self.accelMax = ko.observable(0);
-    self.freqStart = ko.observable(0);
-    self.freqEnd = ko.observable(0);
-    self.dampingRatio = ko.observable("");
-    self.sensorType = ko.observable("");
-
-    // Save settings before save
-    self.onSettingsBeforeSave = function () {
-      const s = self.settingsViewModel.settings.plugins.Pinput_Shaping;
-      s.sizeX(self.sizeX());
-      s.sizeY(self.sizeY());
-      s.sizeZ(self.sizeZ());
-      s.accelMin(self.accelMin());
-      s.accelMax(self.accelMax());
-      s.freqStart(self.freqStart());
-      s.freqEnd(self.freqEnd());
-      s.dampingRatio(self.dampingRatio());
-      s.sensorType(self.sensorType());
-    };
-
-    // On startup
-    self.onStartupComplete = function () {
-      const s = self.settingsViewModel.settings.plugins.Pinput_Shaping;
-      if (!s) {
-        console.warn("⚠️ Plugin settings not found.");
-        return;
-      }
-
-      self.sizeX(s.sizeX());
-      self.sizeY(s.sizeY());
-      self.sizeZ(s.sizeZ());
-      self.accelMin(s.accelMin());
-      self.accelMax(s.accelMax());
-      self.freqStart(s.freqStart());
-      self.freqEnd(s.freqEnd());
-      self.dampingRatio(s.dampingRatio());
-      self.sensorType(s.sensorType());
-
-      const profile = self.settingsViewModel.printerProfiles.currentProfileData;
-      if (profile && profile.volume) {
-        if (!self.sizeX() || self.sizeX() <= 0) self.sizeX(profile.volume.width);
-        if (!self.sizeY() || self.sizeY() <= 0) self.sizeY(profile.volume.depth);
-        if (!self.sizeZ() || self.sizeZ() <= 0) self.sizeZ(profile.volume.height);
-      }
-    };
-
-    // ---Grid selection ---
-    self.gridRows = ko.observableArray(
-      Array.from({ length: 3 }, (_, row) =>
-        Array.from({ length: 3 }, (_, col) => ({ row, col }))
-      )
-    );
-
-    self.hasError = ko.computed(() => !!self.error());
-    self.selectedCell = ko.observable({ row: 1, col: 1 }); // Center
-    self.selectedZ = ko.observable(10); // Default Z
-
-    self.cellWidth = ko.computed(() => self.sizeX() / 3);
-    self.cellHeight = ko.computed(() => self.sizeY() / 3);
-
-    self.calculatedX = ko.computed(() => {
-      const cell = self.selectedCell();
-      return Math.round((cell.col + 0.5) * self.cellWidth());
-    });
-
-    self.calculatedY = ko.computed(() => {
-      const cell = self.selectedCell();
-      return Math.round((cell.row + 0.5) * self.cellHeight());
-    });
-
-    // === Actions ===
-
-    self.getShaperTooltip = function(name) {
-      const tooltips = {
-        ZV: "Zero Vibration – Simple and quick shaper",
-        MZV: "Modified ZV – Better vibration suppression",
-        EI: "Extra Insensitive – Good for noisy systems",
-        "2HUMP_EI": "Extended EI with stronger suppression",
-        "3HUMP_EI": "High-order EI for aggressive control"
-      };
-      return tooltips[name] || "Shaper configuration";
-    };
-
-    // Results Section Observables
-    self.showResults = ko.observable(false);
-    self.signalImgUrl = ko.observable("");
-    self.psdImgUrl = ko.observable("");
-    self.csvFileUrl = ko.observable("");
-    self.recommendedCommand = ko.observable("");
-
-    self.runAccTest = function () {
-      self.error("");
-      self.summary("Executing Test...");
-      self.samples([]);
-      self.hasData(false);
-
-      OctoPrint.simpleApiCommand("Pinput_Shaping", "run_accelerometer_test", {})
-        .done(function (response) {
-          if (response.success) {
-            self.summary(response.summary);
-            self.samples(response.samples);
-            self.hasData(true);
-          } else {
-            self.summary("");
-            self.error("Error: " + response.error);
-          }
-        })
-        .fail(function (jqXHR, textStatus, errorThrown) {
-          self.summary("");
-          self.error("AJAX error: " + errorThrown);
-        });
-    };
-
-    self.shaperResults = ko.observableArray([]);
-
-    self.openImageModal = function (imgUrl) {
-      $("#modalImage").attr("src", imgUrl);
-      $("#downloadImageLink").attr("href", imgUrl);
-      $("#imageModal").modal("show");
-    };
-
-    self.runAxisTest = function (axis) {
-      self.error(null);
-      self.summary("Executing Test for " + axis + "...");
-      self.hasData(false);
-
-      OctoPrint.simpleApiCommand("Pinput_Shaping", "run_axis_test", { data: { axis: axis } })
-        .done(function (response) {
-          if (response.success) {
-            self.summary(response.summary);
-          } else {
-            self.summary("");
-            self.error("Error: " + response.error);
-          }
-        })
-        .fail(function (jqXHR, textStatus, errorThrown) {
-          self.summary("");
-          self.error("AJAX error: " + errorThrown);
-        });
-    };
-
-    self.runResonance = function (axis) {
-      self.error(null);
-      self.summary("Executing Resonance Test for " + axis + "...");
-      self.hasData(false);
-
-      const payload = {
-        axis: axis,
-        start_x: self.calculatedX(),
-        start_y: self.calculatedY(),
-        start_z: self.selectedZ()
-      };
-
-      console.log("🔁 Sending resonance test with payload:", payload);
-
-      OctoPrint.simpleApiCommand("Pinput_Shaping", "run_resonance_test", { data: payload })
-        .done(function (response) {
-          if (response.success) {
-            self.summary(response.summary);
-          } else {
-            self.summary("");
-            self.error("Error: " + response.error);
-          }
-        })
-        .fail(function (jqXHR, textStatus, errorThrown) {
-          self.summary("");
-          self.error("AJAX error: " + errorThrown);
-        });
-    };
-
-    self.emergencyStop = function () {
-      if (confirm("Are you sure? This will halt the printer immediately!")) {
-        $.ajax({
-          url: API_BASEURL + "printer/command",
-          type: "POST",
-          dataType: "json",
-          contentType: "application/json; charset=UTF-8",
-          data: JSON.stringify({ command: "M112" })
-        }).fail(function (jqXHR, textStatus, errorThrown) {
-          console.error("Emergency stop failed:", errorThrown);
-        });
-      }
-    };
-
-    self.sendFreqGcode = function () {
-      const axis = self.bestShaperAxis().toUpperCase();
-      const freq = parseFloat(self.baseFreq()).toFixed(2);
-      const gcode = `M593 ${axis} F${freq}`;
-    
-      if (confirm(`Send to printer?\n\n${gcode}`)) {
-        $.ajax({
-          url: API_BASEURL + "printer/command",
-          type: "POST",
-          dataType: "json",
-          contentType: "application/json; charset=UTF-8",
-          data: JSON.stringify({ commands: [gcode] })
-        })
-          .done(() => alert("Frequency set!"))
-          .fail(() => alert("Failed to send G-code"));
-      }
-    };
-    
-    self.sendDampingGcode = function () {
-      const axis = self.bestShaperAxis().toUpperCase();
-      const damping = parseFloat(self.dampingRatio()).toFixed(2);
-      const gcode = `M593 ${axis} D${damping}`;
-    
-      if (confirm(`Send to printer?\n\n${gcode}`)) {
-        $.ajax({
-          url: API_BASEURL + "printer/command",
-          type: "POST",
-          dataType: "json",
-          contentType: "application/json; charset=UTF-8",
-          data: JSON.stringify({ commands: [gcode] })
-        })
-          .done(() => alert("Damping set!"))
-          .fail(() => alert("Failed to send G-code"));
-      }
-    };
-
-    
-
-
-    function showPopup(message) {
-      console.log("Attempting to show popup:", message);
-
-      // If modal does not exist, create it
-      if ($("#customPopup").length === 0) {
-        $("body").append(`
-              <div id="customPopup" class="modal fade" tabindex="-1" role="dialog">
-                  <div class="modal-dialog modal-dialog-centered" role="document">
-                      <div class="modal-content" style="border-radius: 10px; overflow: hidden;">
-                          <div class="modal-header" style="background: linear-gradient(135deg, #007bff, #6610f2); color: white;">
-                              <h5 class="modal-title">
-                                  <i class="fas fa-info-circle"></i> Processing Request
-                              </h5>
-                              <button type="button" class="close" data-dismiss="modal" aria-label="Close" style="color: white; opacity: 0.8;">
-                                  <span aria-hidden="true">&times;</span>
-                              </button>
-                          </div>
-                          <div class="modal-body text-center">
-                              <p id="customPopupMessage" class="mb-3" style="font-size: 16px; font-weight: 500;"></p>
-                              <div class="spinner">
-                                  <div class="double-bounce1"></div>
-                                  <div class="double-bounce2"></div>
-                              </div>
-                          </div>
-                      </div>
-                  </div>
-              </div>
-          `);
-
-        // Add custom CSS styles
-        $("head").append(`
-              <style>
-                  .spinner {
-                      width: 50px;
-                      height: 50px;
-                      position: relative;
-                      margin: 0 auto;
-                  }
-  
-                  .double-bounce1, .double-bounce2 {
-                      width: 100%;
-                      height: 100%;
-                      border-radius: 50%;
-                      background-color: #007bff;
-                      opacity: 0.6;
-                      position: absolute;
-                      top: 0;
-                      left: 0;
-                      animation: bounce 2.0s infinite ease-in-out;
-                  }
-  
-                  .double-bounce2 {
-                      animation-delay: -1.0s;
-                  }
-  
-                  @keyframes bounce {
-                      0%, 100% { transform: scale(0.0); }
-                      50% { transform: scale(1.0); }
-                  }
-              </style>
-          `);
-      }
-
-      // Set the message and show the modal
-      $("#customPopupMessage").text(message);
-      $("#customPopup").modal("show");
-    }
-
-    function closePopup() {
-      console.log("Closing popup...");
-      $("#customPopup").modal("hide");
-    }
-
-    function closeErrorPopup() {
-      console.log("Closing popup...");
-      $("#errorPopup").modal("hide");
-    }
-
-    function showErrorPopup(message) {
-      console.log("Attempting to show error popup:", message);
-
-      // If modal does not exist, create it
-      if ($("#errorPopup").length === 0) {
-        $("body").append(`
-              <div id="errorPopup" class="modal fade" tabindex="-1" role="dialog">
-                  <div class="modal-dialog modal-dialog-centered" role="document">
-                      <div class="modal-content" style="border-radius: 10px; overflow: hidden;">
-                          <div class="modal-header" style="background: linear-gradient(135deg, #dc3545, #b30000); color: white;">
-                              <h5 class="modal-title">
-                                  <i class="fas fa-exclamation-triangle"></i> Error Occurred
-                              </h5>
-                              <button type="button" class="close" data-dismiss="modal" aria-label="Close" style="color: white; opacity: 0.8;">
-                                  <span aria-hidden="true">&times;</span>
-                              </button>
-                          </div>
-                          <div class="modal-body text-center">
-                              <p id="errorPopupMessage" class="mb-3" style="font-size: 16px; font-weight: 500;"></p>
-                              <div class="error-animation">
-                                  <div class="circle">
-                                      <div class="cross">
-                                          <div class="cross-line"></div>
-                                          <div class="cross-line"></div>
-                                      </div>
-                                  </div>
-                              </div>
-                          </div>
-                      </div>
-                  </div>
-              </div>
-          `);
-
-        // Add custom CSS styles
-        $("head").append(`
-              <style>
-                  .error-animation {
-                      display: flex;
-                      justify-content: center;
-                      align-items: center;
-                      width: 60px;
-                      height: 60px;
-                      margin: 10px auto;
-                      position: relative;
-                  }
-  
-                  .circle {
-                      width: 60px;
-                      height: 60px;
-                      background-color: #dc3545;
-                      border-radius: 50%;
-                      display: flex;
-                      justify-content: center;
-                      align-items: center;
-                      position: absolute;
-                      animation: pulse 1.5s infinite;
-                  }
-  
-                  .cross {
-                      position: relative;
-                      width: 40px;
-                      height: 40px;
-                  }
-  
-                  .cross-line {
-                      position: absolute;
-                      width: 35px;
-                      height: 6px;
-                      background-color: white;
-                      border-radius: 5px;
-                      top: 50%;
-                      left: 50%;
-                      transform: translate(-50%, -50%) rotate(45deg);
-                  }
-  
-                  .cross-line:nth-child(2) {
-                      transform: translate(-50%, -50%) rotate(-45deg);
-                  }
-  
-                  @keyframes pulse {
-                      0% { transform: scale(1); opacity: 0.7; }
-                      50% { transform: scale(1.2); opacity: 0.5; }
-                      100% { transform: scale(1); opacity: 0.7; }
-                  }
-              </style>
-          `);
-      }
-
-      // Set the message and show the modal
-      $("#errorPopupMessage").text(message);
-      $("#errorPopup").modal("show");
-    }
-
-
-
-
-
-    self.onDataUpdaterPluginMessage = function (plugin, data) {
-      if (plugin !== "Pinput_Shaping") return;
-
-      if (data.type === "plotly_data") {
-        // --- Clean up old plot ---
-        Plotly.purge('plot_signal');
-        Plotly.purge('plot_psd');
-    
-        // === SIGNAL GRAPH ===
-        const traceRaw = {
-          x: data.time,
-          y: data.raw,
-          mode: 'lines',
-          name: 'Raw',
-          line: { color: 'rgba(0,123,255,0.5)', width: 1.5 }
+        self.number = function (value, digits) {
+            return Number.isFinite(value) ? value.toFixed(digits === undefined ? 1 : digits) : "—";
         };
-    
-        const traceFiltered = {
-          x: data.time,
-          y: data.filtered,
-          mode: 'lines',
-          name: 'Filtered',
-          line: { color: 'orange', width: 2 }
-        };
-    
-        const layoutSignal = {
-          title: `Signal (Axis ${data.axis})`,
-          xaxis: { title: 'Time (s)' },
-          yaxis: { title: 'Acceleration (mm/s²)' },
-          margin: { t: 40 }
-        };
-    
-        Plotly.newPlot('plot_signal', [traceRaw, traceFiltered], layoutSignal, { responsive: true });
-    
-        // === PSD GRAPH ===
-        const psdTraces = [
-          {
-            x: data.freqs,
-            y: data.psd_original,
-            mode: 'lines',
-            name: 'Original PSD',
-            line: { color: 'black', width: 1.5 }
-          }
-        ];
-    
-        for (const [name, shaper] of Object.entries(data.shapers)) {
-         
-          const freq = parseFloat(shaper.shaper_freq).toFixed(1);
-          const duration = parseFloat(shaper.shaper_duration_ms).toFixed(1);
+        self.backendLabel = ko.pureComputed(() => self.nativeSelected() ? "Marlin M495" : "Software excitation");
+        self.sensorLabel = ko.pureComputed(() => {
+            if (self.sensorType() === "lis2dw") return "LIS2DW ±" + self.lis2dwRange() + " g";
+            return self.sensorType() === "adxlusb" ? "ADXL345 USB" : "ADXL345 SPI";
+        });
+        self.qualityInfo = ko.pureComputed(() => self.result() && self.result().quality || {});
+        self.resultRange = ko.pureComputed(() => {
+            const sensor = self.qualityInfo().accelerometer;
+            return sensor && Number.isFinite(sensor.range_g) ? "±" + sensor.range_g + " g" : "Not reported";
+        });
+        self.resultBackend = ko.pureComputed(() => self.result() && self.result().backend === "marlin_m495" ?
+            "Marlin M495" : "Software excitation");
+        self.qualityJSON = ko.pureComputed(() => JSON.stringify(self.qualityInfo(), null, 2));
+        self.progressSteps = ko.pureComputed(() => ["Prepare", "Position", "Acquire", "Measure", "Validate & analyze"]
+            .map((label, index) => ({label: label, done: index < self.progressPhase(),
+                current: index === self.progressPhase(), failed: index === self.progressPhase() && !!self.error(),
+                status: index < self.progressPhase() ? "Complete" :
+                    index === self.progressPhase() ? (self.error() ? "Interrupted" : "In progress") : "Pending"})));
 
-          psdTraces.push({
-            x: data.freqs,
-            y: shaper.psd,
-            // Display: ShaperName (Freq Hz / Duration ms)
-            name: `${name} (${freq} Hz / ${duration} ms) | vibr=${shaper.vibr}, accel=${shaper.suggested_accel}`,
-            line: { dash: 'dash', width: 1.2 }
-          });
+        let lastError = "";
+        function setError(message) {
+            message = message || "";
+            self.error(message);
+            if (message && message !== lastError) self.errorToastOpen(true);
+            if (!message) self.errorToastOpen(false);
+            lastError = message;
+        }
+        self.dismissError = function () { self.errorToastOpen(false); };
+        self.openError = function () { if (self.error()) self.errorToastOpen(true); };
+        self.showSetup = function () { self.view("setup"); };
+        self.showResults = function () {
+            if (self.result()) {
+                self.view("results");
+                resizeCharts();
+            }
+        };
+        self.selectShaper = function (name) {
+            if (self.canSelectShaper() && self.shaperChoices().some(choice => choice.name === name)) self.selectedShaper(name);
+        };
+        self.selectChartTab = function (tab) {
+            if (!["overview", "signal", "frequency", "diagnostics"].includes(tab)) return;
+            self.chartTab(tab);
+            resizeCharts();
+        };
+        self.chartTabKey = function (data, event) {
+            const tabs = ["overview", "signal", "frequency", "diagnostics"];
+            const index = tabs.indexOf(self.chartTab());
+            const next = {ArrowRight: (index + 1) % tabs.length, ArrowLeft: (index + tabs.length - 1) % tabs.length,
+                Home: 0, End: tabs.length - 1}[event.key];
+            if (next === undefined) return true;
+            event.preventDefault();
+            self.selectChartTab(tabs[next]);
+            if (typeof document !== "undefined") document.getElementById("pinput-tab-" + tabs[next]).focus();
+            return false;
+        };
+        function resizeCharts() {
+            if (typeof window === "undefined" || typeof Plotly === "undefined" || !Plotly.Plots) return;
+            window.requestAnimationFrame(function () {
+                ["pinput_signal", "pinput_psd"].forEach(id => {
+                    const element = document.getElementById(id);
+                    if (element && element.offsetWidth && element.data) Plotly.Plots.resize(element);
+                });
+            });
+        }
+        self.toggleFullscreen = function () {
+            if (!self.fullscreenAvailable) return;
+            const task = document.fullscreenElement ? document.exitFullscreen() :
+                document.getElementById("pinput-analysis").requestFullscreen();
+            if (task && task.catch) task.catch(error => console.warn("Fullscreen unavailable", error));
+        };
+        if (typeof document !== "undefined") document.addEventListener("fullscreenchange", resizeCharts);
+
+        function observeStage(stage) {
+            if (self.operation() !== "run_resonance_test" || self.error()) return;
+            let phase = -1;
+            if (/prepar|checking sensor/.test(stage)) phase = 0;
+            if (/homing|positioning/.test(stage)) phase = 1;
+            if (/ARMED_WAIT|arming native/.test(stage)) phase = 2;
+            if (/^measuring/.test(stage)) phase = 3;
+            if (/stopping capture|validating capture|analyzing|restoring|verifying printer settings/.test(stage)) phase = 4;
+            self.progressPhase(Math.max(self.progressPhase(), phase));
         }
 
-        const max_x_limit = 115; // Focus on relevant frequency range
-        let max_psd_in_range = 0; // To determine dynamic y-axis limit
-        let psd_arr = data.psd_original; // Original PSD array
-        let freqs_arr = data.freqs; // Frequency array
-    
-        // Find max PSD for Frequencies > 15 Hz
-        for (let i = 0; i < freqs_arr.length; i++) {
-            if (freqs_arr[i] >= 15.0 && freqs_arr[i] <= max_x_limit) {
-                if (psd_arr[i] > max_psd_in_range) {
-                    max_psd_in_range = psd_arr[i];
+        let protocolSession = "", protocolRequest = 0;
+        function clearProtocolEvents() {
+            self.protocolEvents([]);
+            self.protocolLoading(false);
+            protocolSession = "";
+            ++protocolRequest;
+        }
+        function loadProtocolEvents() {
+            const source = self.result() && self.result().files && self.result().files.events ? self.result() : self.diagnostics();
+            if (!source || !source.files || !source.files.events || self.busy() ||
+                    typeof window === "undefined" || !window.fetch || source.session_id === protocolSession) return;
+            const session = source.session_id, requestId = ++protocolRequest;
+            protocolSession = session;
+            self.protocolEvents([]);
+            self.protocolLoading(true);
+            const descriptions = {HOMED: "Homing and positioning completed", ARMED_WAIT: "Prepared; waiting for host ARM",
+                ARM_ACK: "Host ARM accepted", START: "Native excitation started", COMPLETE: "Native movement completed",
+                ABORTED: "Native test aborted", ERROR: "Firmware error", ARM_REJECTED: "Host ARM rejected"};
+            window.fetch(self.fileURL("events"), {credentials: "same-origin"}).then(response => {
+                if (!response.ok) throw Error("Protocol events unavailable");
+                return response.json();
+            }).then(events => {
+                if (requestId !== protocolRequest || !Array.isArray(events)) return;
+                const selected = events.filter(item => item.event && descriptions[item.event.kind] && Number.isFinite(item.host_time));
+                const origin = selected.length ? selected[0].host_time : 0;
+                self.protocolEvents(selected.map(item => ({kind: item.event.kind,
+                    elapsed: (item.host_time - origin).toFixed(2),
+                    description: descriptions[item.event.kind] + (item.event.reason ? ": " + item.event.reason : ""),
+                    failed: ["ERROR", "ABORTED", "ARM_REJECTED"].includes(item.event.kind)})));
+            }).catch(error => {
+                if (requestId === protocolRequest) console.warn("Use the protocol events download for diagnostics.", error);
+            }).finally(() => { if (requestId === protocolRequest) self.protocolLoading(false); });
+        }
+
+        self.available = ko.pureComputed(() =>
+            self.printerState.isOperational() && !self.printerState.isPrinting() &&
+            !self.busy() && !self.savingSettings() && !self.recoveryRequired());
+        self.firmwareReady = ko.pureComputed(() => self.firmware().state === "ready");
+        self.canMove = ko.pureComputed(() => self.available() && self.firmwareReady());
+        self.nativeSelected = ko.pureComputed(() => self.excitationBackend() === "marlin_m495");
+        self.nativeValidation = ko.pureComputed(() => {
+            if (!self.nativeSelected()) return "";
+            const start = Number(self.nativeStart()), end = Number(self.nativeEnd());
+            const octave = Number(self.nativeOctave()), accel = Number(self.nativeAccel());
+            const prep = Number(self.nativePrepareTimeout()), cap = Number(self.nativeMaxCapture());
+            const cancel = Number(self.nativeCancelTimeout());
+            if (![start, end, octave, accel, prep, cap, cancel].every(Number.isFinite) || start < 5 ||
+                end <= start || end > 200 || octave < 20 || octave > 60 || accel < 0.0001 ||
+                accel > 32767 * 4 * Math.PI * Math.PI / 8 - 1 || prep < 30 || prep > 240 ||
+                cap < 30 || cap > 480 || cancel < 10 || cancel > 300 ||
+                [start, end, octave].some(value => Math.abs(value * 100 - Math.round(value * 100)) > 1e-6)) {
+                return "Native parameters are invalid. F: 5–199.99 Hz; T: greater than F, up to 200 Hz; O: 20–60 seconds.";
+            }
+            if (25 + octave * Math.log2(end / start) * 1.15 + 5 > cap) {
+                return "Maximum capture must cover sensor startup, sweep and tail.";
+            }
+            return "";
+        });
+        self.canCalibrate = ko.pureComputed(() => self.canMove() &&
+            (!self.nativeSelected() || (self.nativeCapability().state === "supported" &&
+                self.nativeCapability().protocol === 2 && !self.nativeValidation())));
+        self.applyLabel = ko.pureComputed(() => self.firmware().protocol === "legacy" ?
+            "Apply and verify recommended ZV" : "Apply and verify selected shaper");
+        self.shaperChoices = ko.pureComputed(() => {
+            const result = self.result();
+            const firmware = self.firmware();
+            if (!result || !result.shapers || result.firmware_mode !== firmware.protocol) return [];
+            return Object.keys(result.shapers).filter(name => firmware.allowed_shapers.includes(name))
+                .map(name => ({name: name, label: name + (name === result.best_shaper ? " (recommended)" : "")}));
+        });
+        self.canSelectShaper = ko.pureComputed(() => self.available() && self.firmwareReady() &&
+            self.firmware().protocol === "ftm" && self.shaperChoices().length > 0);
+        self.selectedCandidate = ko.pureComputed(() => {
+            const result = self.result();
+            return result && result.shapers ? result.shapers[self.selectedShaper()] || null : null;
+        });
+        self.selectedCommand = ko.pureComputed(() => {
+            const candidate = self.selectedCandidate();
+            return candidate && candidate.command || "";
+        });
+        self.canApply = ko.pureComputed(() => {
+            const result = self.result();
+            const firmware = self.firmware();
+            const candidate = self.selectedCandidate();
+            return self.available() && self.firmwareReady() && !!result &&
+                result.recommendation_valid !== false &&
+                result.firmware_mode === firmware.protocol &&
+                firmware.allowed_shapers.includes(self.selectedShaper()) &&
+                !!candidate && !!self.selectedCommand() &&
+                ["X", "Y"].includes(result.axis) &&
+                Number.isFinite(candidate.shaper_freq) &&
+                candidate.shaper_freq >= 20 && candidate.shaper_freq <= 200 &&
+                Number.isFinite(result.damping) && !!result.session_id;
+        });
+        self.shapers = ko.pureComputed(() => {
+            const result = self.result();
+            if (!result || !result.shapers) return [];
+            return Object.entries(result.shapers).map(([name, value]) => ({
+                name: name,
+                frequency: Number(value.shaper_freq).toFixed(2),
+                vibration: (100 * value.vibr).toFixed(1) + "%",
+                duration: Number(value.shaper_duration_ms).toFixed(1),
+                acceleration: value.suggested_accel,
+                best: name === result.best_shaper
+            }));
+        });
+
+        self.fileURL = function (kind) {
+            const result = self.result() && self.result().files[kind] ? self.result() : self.diagnostics();
+            if (!result || !result.files[kind]) return "";
+            const root = typeof BASEURL === "string" ? BASEURL : "/";
+            return root + "plugin/Pinput_Shaping/files/" +
+                encodeURIComponent(result.session_id) + "/" +
+                encodeURIComponent(result.files[kind]);
+        };
+
+        function showResult(result) {
+            if (!result || !result.shapers || (!Number.isFinite(result.best_shaper_freq) &&
+                    !(result.backend === "marlin_m495" && result.recommendation_valid === false))) {
+                self.result(null);
+                clearProtocolEvents();
+                return;
+            }
+            const previous = self.result();
+            const resetSelection = !previous || previous.session_id !== result.session_id ||
+                !Object.prototype.hasOwnProperty.call(result.shapers, self.selectedShaper());
+            self.result(result);
+            if (resetSelection) {
+                self.selectedShaper(result.best_shaper);
+                self.chartTab("overview");
+                self.view("results");
+            }
+            self.progressPhase(5);
+            loadProtocolEvents();
+            if (typeof Plotly === "undefined") return;
+            try {
+                Plotly.react("pinput_signal", [
+                    {x: result.time, y: result.raw, name: "Raw sensor data", mode: "lines"},
+                    {x: result.time, y: result.filtered, name: "Preview filter", mode: "lines"}
+                ], chartLayout({title: "Time Signal (" + result.axis + " Axis)", xaxis: {title: "Time (s)"},
+                    yaxis: {title: "Acceleration (sensor units)"}}), {responsive: true, displaylogo: false});
+                const traces = [{x: result.freqs, y: result.psd_original,
+                    name: result.backend === "marlin_m495" ? "Relative fundamental response" : "Unshaped reference", mode: "lines"}];
+                Object.entries(result.shapers).forEach(([name, shaper]) => {
+                    traces.push({x: result.freqs, y: shaper.psd, mode: "lines",
+                        name: name + " @ " + shaper.shaper_freq.toFixed(1) + " Hz (predicted)"});
+                });
+                Plotly.react("pinput_psd", traces, chartLayout({
+                    title: Number.isFinite(result.base_freq) ? "Measured resonance: " + result.base_freq.toFixed(1) + " Hz" : "Native sweep response",
+                    xaxis: {title: "Frequency (Hz)", range: [
+                        result.native_parameters ? result.native_parameters.start : Math.max(5, Number(self.freqStart())),
+                        result.native_parameters ? result.native_parameters.end : Number(self.freqEnd())]},
+                    yaxis: {title: result.spectrum_label || "PSD (sensor units²/Hz)"}
+                }), {responsive: true, displaylogo: false});
+            } catch (error) {
+                console.warn("Interactive charts unavailable; PNG plots remain available.", error);
+            }
+        }
+
+        function chartLayout(layout) {
+            const theme = chartTheme();
+            const axis = {gridcolor: theme.line, zerolinecolor: theme.line, automargin: true};
+            return Object.assign({paper_bgcolor: "rgba(0,0,0,0)", plot_bgcolor: "rgba(0,0,0,0)", font: {color: theme.text},
+                margin: {l: 58, r: 20, t: 50, b: 90}, legend: {orientation: "h", y: -0.25}, colorway: theme.colors,
+                modebar: {bgcolor: "rgba(0,0,0,0)", color: theme.text, activecolor: theme.accent}},
+                layout, {xaxis: Object.assign({}, axis, layout.xaxis), yaxis: Object.assign({}, axis, layout.yaxis)});
+        }
+
+        function chartTheme() {
+            const root = typeof document !== "undefined" && document.getElementById("pinput_shaping_tab");
+            const style = root && window.getComputedStyle(root);
+            const dark = root && root.style.colorScheme === "dark";
+            return {text: style && style.getPropertyValue("--pinput-text").trim() || "#333333",
+                line: style && style.getPropertyValue("--pinput-line").trim() || "rgba(0,0,0,0.2)",
+                accent: style && style.getPropertyValue("--pinput-accent").trim() || "#1769aa",
+                colors: dark ? ["#39a7ff", "#ff982f", "#50cc7f", "#d98bff", "#ff6485", "#b8d9ed", "#e4cc62", "#5bd4db"] :
+                    ["#1478b8", "#b75b0d", "#267b42", "#8545b8", "#bb3758", "#557488", "#907318", "#187b83"]};
+        }
+
+        let themeSignature = "", themeObserver = null;
+        self.syncTheme = function () {
+            if (typeof document === "undefined" || typeof window === "undefined" || !window.getComputedStyle) return;
+            const root = document.getElementById("pinput_shaping_tab");
+            if (!root || !root.parentElement) return;
+            const text = window.getComputedStyle(root.parentElement).color;
+            let background = "rgb(255, 255, 255)";
+            for (let element = root.parentElement; element; element = element.parentElement) {
+                const color = window.getComputedStyle(element).backgroundColor;
+                if (color && color !== "transparent" && !/^rgba\([^)]*,\s*0\s*\)$/.test(color)) {
+                    background = color;
+                    break;
                 }
             }
-        }
-
-        // Set y-axis limit with some margin based on max PSD in the relevant range
-        const y_limit = max_psd_in_range > 0 ? max_psd_in_range * 1.25 : 0.02;
-
-        const layoutPSD = {
-            title: {text: `PSD + Input Shapers <br> (Axis ${data.axis}, Resonance: ${data.base_freq} Hz)`},
-            // We apply the X limit (cut)
-            xaxis: { title: 'Frequency (Hz)', range: [0, max_x_limit] },
-            // We apply the Y limit (zoom on the resonance)
-            yaxis: { title: 'Power Spectral Density', range: [0, y_limit] },
-            margin: { t: 40, b: 150 },
-
-            legend: {
-                orientation: 'h', // Horizontal: makes the elements flow from left to right
-                x: 0,             // X position (0 = left)
-                y: -0.25,         // Y position (-0.25 = below the X axis)
-                xanchor: 'left',  // Position anchor
-                bgcolor: 'rgba(255, 255, 255, 0.5)', // Semi-transparent background (optional)
-                bordercolor: '#ccc',
-                borderwidth: 1
+            const signature = background + "|" + text;
+            if (signature === themeSignature) return;
+            themeSignature = signature;
+            const rgb = background.match(/[\d.]+/g) || [255, 255, 255];
+            const dark = rgb[0] * 0.2126 + rgb[1] * 0.7152 + rgb[2] * 0.0722 < 128;
+            const foreground = text.match(/[\d.]+/g) || [51, 51, 51];
+            const accent = dark ? "112,186,255" : "23,105,170";
+            const success = dark ? "128,212,155" : "38,114,59";
+            const warning = dark ? "232,189,98" : "128,91,18";
+            const values = {background: background, text: text,
+                muted: "rgba(" + foreground.slice(0, 3).join(",") + ",0.82)",
+                line: "rgba(" + foreground.slice(0, 3).join(",") + ",0.25)",
+                accent: "rgb(" + accent + ")", "accent-soft": "rgba(" + accent + ",0.08)",
+                success: "rgb(" + success + ")", "success-soft": "rgba(" + success + ",0.09)",
+                warning: "rgb(" + warning + ")", "warning-soft": "rgba(" + warning + ",0.08)",
+                error: dark ? "#ff9ca2" : "#ad2637"};
+            Object.entries(values).forEach(([name, value]) => root.style.setProperty("--pinput-" + name, value));
+            root.style.colorScheme = dark ? "dark" : "light";
+            if (typeof Plotly !== "undefined" && Plotly.relayout) {
+                const theme = chartTheme();
+                ["pinput_signal", "pinput_psd"].forEach(id => {
+                    const element = document.getElementById(id);
+                    if (element && element.data) Promise.resolve(Plotly.relayout(element, {"paper_bgcolor": "rgba(0,0,0,0)",
+                        "plot_bgcolor": "rgba(0,0,0,0)", "font.color": theme.text, "colorway": theme.colors,
+                        "modebar.bgcolor": "rgba(0,0,0,0)", "modebar.color": theme.text, "modebar.activecolor": theme.accent,
+                        "xaxis.gridcolor": theme.line, "yaxis.gridcolor": theme.line,
+                        "xaxis.zerolinecolor": theme.line, "yaxis.zerolinecolor": theme.line}))
+                        .catch(error => console.warn("Could not update chart theme", error));
+                });
             }
         };
-    
-        Plotly.newPlot('plot_psd', psdTraces, layoutPSD, { responsive: true });
-      }
-    
-      
-      if (data.type === "popup") {
-        //console.log(">>> Showing popup with message:", data.message);
-        showPopup(data.message);
-      } else if (data.type === "close_popup") {
-        closePopup();
-      } else if (data.type === "error_popup") {
-        showErrorPopup(data.message);
-      } else if (data.type === "close_error_popup") {
-        closeErrorPopup();
-      }
 
-
-      if (data.success === true) {
-        self.error(null);
-        self.summary(data.summary);
-        self.samples(data.samples);
-        self.hasData(true);
-      } else if (data.error) {
-        self.summary("");
-        self.error("Error: " + data.error);
-        self.hasData(false);
-      } else {
-        // If there is no error, nor show alert
-        self.error(null);
-      }
-
-
-      if (data.shapers) {
-        const table = [];
-        // data.shapers now contains the detailed, optimal results for each shaper
-        for (let name in data.shapers) {
-          const shaper_data = data.shapers[name];
-          const row = {
-            name: name,
-            
-            vibr: parseFloat(shaper_data.vibr).toExponential(2),
-            shaper_freq: parseFloat(shaper_data.shaper_freq).toFixed(2), 
-            shaper_duration_ms: parseFloat(shaper_data.shaper_duration_ms).toFixed(1),
-            suggested_accel: parseInt(shaper_data.suggested_accel), // *** Suggested Max Acceleration (Heuristic from backend) ***
-            accel: parseFloat(shaper_data.accel).toFixed(1), 
-            isBest: name === data.best_shaper
-          };
-          table.push(row);
+        function watchTheme() {
+            self.syncTheme();
+            if (themeObserver || typeof MutationObserver === "undefined") return;
+            let scheduled = false;
+            function scheduleTheme() {
+                if (scheduled) return;
+                scheduled = true;
+                window.requestAnimationFrame(function () { scheduled = false; self.syncTheme(); });
+            }
+            themeObserver = new MutationObserver(function (records) {
+                const root = document.getElementById("pinput_shaping_tab");
+                if (records.some(record => root && !root.contains(record.target) &&
+                        (record.type === "attributes" || document.head.contains(record.target)))) scheduleTheme();
+            });
+            themeObserver.observe(document.documentElement, {subtree: true, childList: true, attributes: true,
+                attributeFilter: ["class", "style", "data-theme", "href", "disabled"]});
+            document.addEventListener("load", function (event) {
+                if (event.target.tagName === "LINK") scheduleTheme();
+            }, true);
         }
-        self.shaperResults(table);
-      }
 
+        if (typeof window !== "undefined") {
+            window.addEventListener("pinputPlotlyReady", function () {
+                self.interactiveAvailable(typeof Plotly !== "undefined");
+                if (self.result()) showResult(self.result());
+            });
+        }
 
-      if (data.signal_path && data.psd_path && data.command) {
-        const plotsBase = "/plugin/Pinput_Shaping/static/metadata/";
+        function updateState(data) {
+            self.busy(!!data.busy || self.savingSettings());
+            self.stage(self.savingSettings() ? "saving plugin settings" : data.stage || "idle");
+            setError(data.error);
+            observeStage(self.stage());
+            self.recoveryRequired(!!data.recovery_required);
+            self.modesReady(!!data.modes_ready);
+            self.diagnostics(data.diagnostics || null);
+            self.nativeCapability(data.native_capability || {state: "unknown", protocol: null,
+                message: "Click Detect M495 Support for this printer connection."});
+            self.firmware(data.firmware || {state: "unknown", protocol: null, label: "Not detected",
+                allowed_shapers: [], message: "Firmware detection is required before calibration."});
+            if (data.result) {
+                if (!self.result() || self.result().session_id !== data.result.session_id) {
+                    showResult(data.result);
+                }
+            } else {
+                if (self.result()) clearProtocolEvents();
+                self.result(null);
+            }
+            if (data.volume) {
+                self.sizeX(data.volume.width);
+                self.sizeY(data.volume.depth);
+                self.sizeZ(data.volume.height);
+            }
+            loadProtocolEvents();
+        }
 
-        self.signalImgUrl(plotsBase + data.signal_path.split("/").pop());
-        self.psdImgUrl(plotsBase + data.psd_path.split("/").pop());
+        self.refresh = function () {
+            return OctoPrint.simpleApiGet("Pinput_Shaping").done(updateState);
+        };
 
-        const csvName = data.csv_path.split("/").pop();
-        self.csvFileUrl(plotsBase + csvName);
+        function failure(response) {
+            const message = response.responseJSON && response.responseJSON.error ||
+                response.responseText || "The request failed.";
+            self.busy(false);
+            self.refresh().always(function () { setError(message); });
+        }
 
-        self.recommendedCommand(data.command);
-        self.showResults(true);
-      }
+        function request(command, payload, clearResult) {
+            if (self.busy()) return;
+            setError("");
+            self.summary("");
+            self.progress(0);
+            self.progressSource("");
+            self.sensorState("");
+            self.busy(true);
+            self.operation(command);
+            self.stage("starting request");
+            if (clearResult) {
+                self.result(null);
+                self.view("setup");
+                self.progressPhase(command === "run_resonance_test" ? 0 : -1);
+                clearProtocolEvents();
+            }
+            return OctoPrint.simpleApiCommand("Pinput_Shaping", command, payload || {})
+                .fail(failure);
+        }
 
-      if (data.base_freq) {
-        self.baseFreq(data.best_shaper_freq);
-      }
-      if (data.axis) {
-        self.bestShaperAxis(data.axis);  
-      }
-    };
+        function position(axis) {
+            return {data: {axis: axis, start_x: self.calculatedX(),
+                start_y: self.calculatedY(), start_z: Number(self.selectedZ())}};
+        }
 
-    self.signalPlotURL = ko.observable("");
-    self.psdPlotURL = ko.observable("");
-    self.csvPath = ko.observable("");
-    self.m593Command = ko.observable("");
-    self.baseFreq = ko.observable(null);
-    self.bestShaperAxis = ko.observable("");
-    self.dampingRatio = ko.observable("");
+        self.runAccTest = function () {
+            if (self.available()) request("run_accelerometer_test", {}, true);
+        };
+        function applySavedSettings(values) {
+            const settings = self.settingsViewModel.settings.plugins.Pinput_Shaping;
+            Object.entries(values).forEach(([key, value]) => {
+                if (settingKeys.includes(key)) self[key](value);
+                if (typeof settings[key] === "function") settings[key](value);
+            });
+        }
 
-    self.downloadSignalPlot = function () {
-      const link = document.createElement("a");
-      link.href = self.signalPlotURL();
-      link.download = "signal_plot.png";
-      link.click();
-    };
+        function detectAndSave(command) {
+            if (!self.available()) return;
+            const values = {};
+            settingKeys.forEach(key => { values[key] = self[key](); });
+            self.busy(true);
+            self.savingSettings(true);
+            self.stage("saving plugin settings");
+            setError("");
+            // Save only this plugin's displayed settings before freezing a
+            // detection session; unrelated settings in the dialog stay untouched.
+            return OctoPrint.settings.save({plugins: {Pinput_Shaping: values}}).done(function () {
+                applySavedSettings(values);
+                self.savingSettings(false);
+                self.busy(false);
+                request(command, {}, false);
+            }).fail(function (response) {
+                self.savingSettings(false);
+                failure(response);
+            });
+        }
+        self.detectFirmware = function () { return detectAndSave("detect_firmware"); };
+        self.detectM495 = function () { return detectAndSave("detect_m495"); };
+        self.runAxisTest = function (axis) {
+            if (self.canMove()) request("run_axis_test", position(axis), true);
+        };
+        self.runResonance = function (axis) {
+            if (!self.canCalibrate()) return;
+            const movement = self.nativeSelected() ? "Marlin M495 will home and move to its internal test position." :
+                "The printer will home and move at the selected position.";
+            if (confirm("Start " + axis + " resonance calibration? " + movement + " Check sensor mounting and clear the travel area.")) {
+                const payload = self.nativeSelected() ? {data: {axis: axis}} : position(axis);
+                payload.data.backend = self.excitationBackend();
+                if (self.nativeSelected()) {
+                    payload.data.native_settings = {};
+                    ["nativeStart", "nativeEnd", "nativeOctave", "nativeAccel", "nativePrepareTimeout",
+                        "nativeMaxCapture", "nativeCancelTimeout"].forEach(key => { payload.data.native_settings[key] = self[key](); });
+                }
+                request("run_resonance_test", payload, true);
+            }
+        };
+        self.cancel = function () {
+            OctoPrint.simpleApiCommand("Pinput_Shaping", "cancel", {}).fail(failure);
+        };
+        self.emergencyStop = function () {
+            OctoPrint.simpleApiCommand("Pinput_Shaping", "cancel", {});
+            OctoPrint.control.sendGcode("M112").fail(failure);
+        };
+        self.applyResult = function () {
+            if (!self.canApply()) return;
+            const result = self.result();
+            const shaper = self.selectedShaper();
+            if (confirm("Apply and verify " + shaper + " at " + self.selectedCandidate().shaper_freq + " Hz?\n\n" + self.selectedCommand() +
+                "\n\nEEPROM will not be written.")) {
+                request("apply_result", {session_id: result.session_id, shaper: shaper}, false);
+            }
+        };
+        self.useRecommendation = function () {
+            if (self.canSelectShaper()) self.selectedShaper(self.result().best_shaper);
+        };
+        self.recover = function () {
+            if (self.busy()) return;
+            if (confirm("Recover the interrupted calibration? Confirm this is the same printer. For native M495 recovery after a disconnect or reset, first verify the printer is fully stopped or reset. Recovery sends M496 and drains its queued acknowledgment before verifying settings.")) {
+                request("recover", {native_idle_confirmed: true}, false);
+            }
+        };
 
-    self.downloadPSDPlot = function () {
-      const link = document.createElement("a");
-      link.href = self.psdPlotURL();
-      link.download = "psd_plot.png";
-      link.click();
-    };
-
-    self.downloadCSV = function () {
-      if (!self.csvPath()) return;
-      const link = document.createElement("a");
-      link.href = self.csvPath();
-      link.download = self.csvPath().split("/").pop();
-      link.click();
-    };
-
-    self.sendM593Command = function () {
-      if (!self.m593Command()) return;
-      OctoPrint.control.sendGcode(self.m593Command())
-        .done(() => alert("Command sent to printer!"))
-        .fail(() => alert("Failed to send command."));
-    };
-
-    return self;
-  }
-
-  $('#imageModal').on('shown.bs.modal', function () {
-    const img = document.getElementById('modalImage');
-    const dialog = this.querySelector('.modal-dialog');
-  
-    function adjustModalSize() {
-      const maxWidth = window.innerWidth * 0.95;
-      const maxHeight = window.innerHeight * 0.95;
-  
-      const scaleX = maxWidth / img.naturalWidth;
-      const scaleY = maxHeight / img.naturalHeight;
-      const scale = Math.min(scaleX, scaleY, 1);
-  
-      const finalWidth = img.naturalWidth * scale;
-      dialog.style.width = `${finalWidth}px`;
+        self.onSettingsBeforeSave = function () {
+            const settings = self.settingsViewModel.settings.plugins.Pinput_Shaping;
+            settingKeys.forEach(key => { settings[key](self[key]()); });
+        };
+        self.onStartupComplete = function () {
+            watchTheme();
+            const settings = self.settingsViewModel.settings.plugins.Pinput_Shaping;
+            settingKeys.forEach(key => { self[key](settings[key]()); });
+            self.refresh();
+        };
+        self.onServerReconnect = self.refresh;
+        self.onDataUpdaterPluginMessage = function (plugin, data) {
+            if (plugin !== "Pinput_Shaping") return;
+            if (data.type === "state") updateState(data);
+            else if (data.type === "detection_saved") {
+                applySavedSettings(data.settings || {});
+                self.summary(data.message || "Detection and settings saved.");
+            } else if (data.type === "results_ready") showResult(data.result);
+            else if (data.type === "progress") {
+                self.progress(Math.round(data.progress * 100));
+                self.progressSource(data.progress_source || "");
+                self.sensorState(data.sensor_state || "");
+            }
+            else if (data.type === "sensor_values") {
+                self.samples(data.samples);
+                self.summary(data.summary);
+            } else if (data.type === "applied") {
+                self.result(null);
+                self.summary(data.message);
+            } else if (data.type === "completed") {
+                self.summary(data.message);
+            }
+        };
+        setInterval(function () { if (self.busy()) self.refresh(); }, 5000);
     }
-  
-    // Reset width before resizing
-    dialog.style.width = "";
-  
-    if (img.complete) {
-      // Image already loaded
-      adjustModalSize();
-    } else {
-      img.onload = adjustModalSize;
-    }
-  
-    // Force "Reload" for some browsers
-    img.src = img.src;
-  });
 
-  OCTOPRINT_VIEWMODELS.push({
-    construct: PinputShapingViewModel,
-    dependencies: ["settingsViewModel"],
-    elements: ["#pinput_shaping_tab", "#settings_plugin_Pinput_Shaping"]
-  });
-
-  console.log("✅ Pinput Shaping ViewModel registered");
+    OCTOPRINT_VIEWMODELS.push({
+        construct: PinputShapingViewModel,
+        dependencies: ["settingsViewModel", "printerStateViewModel"],
+        elements: ["#pinput_shaping_tab", "#settings_plugin_Pinput_Shaping"]
+    });
 });
 

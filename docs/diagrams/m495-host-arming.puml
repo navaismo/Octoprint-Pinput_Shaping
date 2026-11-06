@@ -1,0 +1,70 @@
+@startuml
+title OctoPrint / Marlin M495 — PIS v2 host arming
+hide footbox
+actor User
+participant "OctoPrint plugin" as P
+participant Marlin as M
+participant "Sensor wrapper" as S
+
+User -> P : Detect Native M495
+P -> P : Save plugin settings
+P -> M : M118 opening query marker
+P -> M : M495 Q
+M --> P : echo:PIS:RT:READY:1
+P -> M : M118 closing query marker
+P -> M : M118 opening v2 marker
+P -> M : M495 Q2
+M --> P : echo:PIS:RT:READY:2
+P -> M : M118 closing v2 marker
+P -> P : Save support and select Native M495
+note over P,M
+  Q asks for v1; Q2 explicitly negotiates v2.
+  Q1 is not an accepted token.
+  Queries cannot home or start a test.
+end note
+
+User -> P : Calibrate X or Y
+P -> M : M495 X F20 T60 O20 A40 I12345678 S W
+M -> M : Home axes
+M --> P : echo:PIS:RT:HOMED:12345678:<millis>
+M -> M : Position and prepare generator
+M --> P : echo:PIS:RT:ARMED_WAIT:12345678
+note right of M
+  Generator remains off.
+  30-second ARM timeout starts now.
+  Command processing remains available;
+  conflicting motion/settings are rejected.
+end note
+P -> S : Start capture
+S --> P : Alive, new samples, increasing timestamps
+P -> P : Recheck sensor health
+P -> M : M495 I12345678 R
+M -> M : Validate ID, port, deadline, cancellation,
+M -> M : operational/trusted-axis and prepared state
+M --> P : echo:PIS:RT:ARM_ACK:12345678
+M --> P : echo:PIS:RT:START:12345678:X:20.00:60.00
+M -> M : Run native excitation
+S --> P : Record acceleration
+
+alt Successful sweep
+  M --> P : echo:PIS:RT:COMPLETE:12345678
+  note right of M : All native movement and pending FT step bits drained
+  P -> S : Capture 0.5 s tail, then Q
+  S --> P : Successful EOF; metadata when available
+  P -> P : Verify settings, analyze and show results
+else Sensor failure or user cancellation
+  P -> M : M496
+  P -> M : M118 cancellation queue fence
+  M --> P : echo:PIS:RT:ABORTED:<id> or ERROR:<id>:<reason>
+  M --> P : Cancellation fence received
+  P -> S : Stop capture
+  P -> P : Verify cleanup or require recovery
+end
+
+note over P,S
+  Host, firmware and sensor clocks are independent.
+  Missing/late ARM cannot start excitation.
+  Sensor failure after ARM requires cancellation even before START is received.
+  No automatic movement retries.
+end note
+@enduml

@@ -1,56 +1,33 @@
 #!/usr/bin/env bash
 set -euo pipefail
+source "$(cd -- "$(dirname -- "$0")" && pwd)/install-common.sh"
+require_root
 
-TOTAL=3
-CURRENT=1
-
-# Function to show step
-step() {
-    echo -e "\n[$CURRENT/$TOTAL] $1..."
-    ((CURRENT++))
-}
-
-# Step 1: Enable SPI
-step "Enable SPI"
-sudo sed -i \
-    -e 's/^#\?dtparam=spi=.*/dtparam=spi=on/' \
-    /boot/config.txt
-sudo grep -q '^dtparam=spi=on' /boot/config.txt ||
-    echo 'dtparam=spi=on' | sudo tee -a /boot/config.txt
-
-# Step 2: Installing Deps
-step "Installing Deps"
-sudo apt-get update
-sudo apt-get install -y build-essential make gcc git pigpio python3-pigpio libopenblas-dev
-
-# Step 3: installing ADXL345SPI Tool (workaround para git como root)
-step "Installing ADXL345SPI Tool"
-
-# We detect the real user (for when the script is executed with Sudo)
-CLONE_USER="${SUDO_USER:-$USER}"
-
-if [ "$(id -u)" -eq 0 ]; then
-    echo "Cloning as $CLONE_USER to avoid Git root warning..."
-    sudo -u "$CLONE_USER" mkdir -p ADXLTool
-    cd ADXLTool
-    sudo -u "$CLONE_USER" git clone https://github.com/navaismo/adxl345spi.git
+config=/boot/firmware/config.txt
+if [[ ! -f "$config" ]]; then
+    config=/boot/config.txt
+fi
+if [[ ! -f "$config" ]]; then
+    echo "Raspberry Pi boot configuration was not found." >&2
+    exit 1
+fi
+if grep -Eq '^#?dtparam=spi=' "$config"; then
+    sed -i -E 's/^#?dtparam=spi=.*/dtparam=spi=on/' "$config"
 else
-    git clone https://github.com/navaismo/adxl345spi.git
+    echo 'dtparam=spi=on' >> "$config"
 fi
 
-cd adxl345spi
-sudo make
-sudo make install
+apt-get update
+apt-get install -y build-essential make gcc git pigpio python3-pigpio libopenblas-dev sudo
+checkout_wrapper adxl345spi 13487d93e9cdd5a1f95386ac77badcc5da444b8a
+make
+make install
 
-if [ "$(id -u)" -eq 0 ]; then
-    echo "Cloning as $CLONE_USER to avoid Git root warning..."
-    sudo -u "$CLONE_USER" echo -e "octoprint ALL=(ALL) NOPASSWD: $(which adxl345spi)\n$CLONE_USER ALL=(ALL) NOPASSWD: $(which adxl345spi)" |
-        sudo tee /etc/sudoers.d/octoprint_adxl
-
-else
-    echo -e "octoprint ALL=(ALL) NOPASSWD: $(which adxl345spi)\n$(whoami) ALL=(ALL) NOPASSWD: $(which adxl345spi)" |
-        sudo tee /etc/sudoers.d/octoprint_adxl
-fi
-
-echo -e "\n✔ All steps completed successfully!"
-echo -e "Reboot the system to apply changes.\n"
+# SPI GPIO access requires the privileged C wrapper. Validate sudoers before
+# replacing the active rule, and keep the installed executable root-owned.
+chown root:root /usr/local/bin/adxl345spi
+chmod 755 /usr/local/bin/adxl345spi
+printf '%s ALL=(root) NOPASSWD: /usr/local/bin/adxl345spi\n' "$OCTOPRINT_USER" > "$INSTALL_WORK_DIR/sudoers"
+visudo -cf "$INSTALL_WORK_DIR/sudoers"
+install -o root -g root -m 440 "$INSTALL_WORK_DIR/sudoers" /etc/sudoers.d/octoprint_adxl
+echo "Installed ADXL345 SPI wrapper. Reboot to apply SPI changes."
