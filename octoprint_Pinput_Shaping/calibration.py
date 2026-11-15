@@ -14,6 +14,7 @@ import uuid
 
 from .capture import AccelerometerCapture
 from .firmware import FirmwareSnapshot, SHAPER_IDS, finite_number, shaping_command
+from .lcd import CalibrationLCDMixin
 from .motion import bounds_from_profile, plan_excitation, validate_position
 from .native import NativeResonanceMixin
 from .native_protocol import NativeParameters
@@ -53,10 +54,14 @@ class Session:
     native_outgoing: object = field(default_factory=lambda: queue.Queue(maxsize=64), repr=False)
     native_capture_error: str = None
     native_idle_confirmed: bool = False
+    lcd_version: int = None
+    lcd_identifier: int = None
+    lcd_text: bool = False
+    lcd_deadline: float = 0
     deadline: float = field(default_factory=lambda: time.monotonic() + 600)
 
 
-class CalibrationController(NativeResonanceMixin):
+class CalibrationController(NativeResonanceMixin, CalibrationLCDMixin):
     def __init__(self, printer, profile, settings, data_folder, publish,
                  logger=None, capture_factory=AccelerometerCapture, analyzer_factory=None, persist_detection=None):
         self.printer = printer
@@ -379,7 +384,7 @@ class CalibrationController(NativeResonanceMixin):
                 lines, _ = self._exchange(session, ["M493 V", "M494"], recovery=recovery)
                 for line in lines:
                     result.feed(line)
-            result.validate(session.axis, allow_standard=session.native_mode or session.kind in ("detect", "recover"))
+            result.validate(session.axis, allow_standard=True)
         except Exception as exc:
             self._set_firmware(session, result, error=str(exc))
             raise
@@ -577,6 +582,8 @@ class CalibrationController(NativeResonanceMixin):
         self._stage(session, "analyzing")
         analyzer = self._analyzer(session, folder / "capture.csv")
         analyzer.analyze()
+        if session.snapshot.mode == "ftm" and session.snapshot.uses_standard_motion:
+            analyzer.warnings.append("FTM is disabled (M493 S0). Applying axis settings does not enable FTM; review and enable its motion mode separately.")
         analyzer.generate_graphs()
         return self._analysis_result(session, analyzer)
 
@@ -750,8 +757,13 @@ class CalibrationController(NativeResonanceMixin):
                         self._motion_test(session, folder)
                         self.publish({"type": "completed", "message": f"{session.axis} axis test completed."})
                     else:
+                        self._lcd_screen(session, folder)
                         result = self._resonance(session, folder)
                         self._check(session)
+                        self._lcd_screen(session, folder, result)
+                        for key, name in (("lcd_info", "lcd_info.png"), ("lcd_result", "lcd_result.png")):
+                            if (folder / name).is_file():
+                                result["files"][key] = name
                         self._write_json(folder / "result.json", result)
                         self.result = result
                         self._log_analysis_result(session, result)
@@ -787,6 +799,7 @@ class CalibrationController(NativeResonanceMixin):
                     if self.printer.get_state_id() == "OPERATIONAL" and not (session.native_mode and session.kind in ("resonance", "recover")):
                         self.printer.commands("M112", tags={TAG, RECOVERY_TAG})
             self._native_log_transmissions(session)
+            self._lcd_failure(session)
             if held:
                 try:
                     self.printer.set_job_on_hold(False)

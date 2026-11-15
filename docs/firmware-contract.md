@@ -118,11 +118,23 @@ replace those checks.
 
 Before modifying settings, the worker reads `M503`, `M220` and `M114`, then
 checks `M493 V` and `M494` when FTM is present. Reports must contain complete
-axis settings and motion limits. Software calibration requires FTM to be
-active, with static shaping and a trapezoidal trajectory without additional
-smoothing. Native calibration also permits FTM's standard-motion mode (S0),
-while preserving the reviewed static shaping/trajectory requirements. It does
-not activate FTM when applying an axis configuration measured in S0.
+axis settings and motion limits. Both software and native calibration permit
+FTM active (S1) or standard motion (S0), preserving the reported mode instead
+of enabling FTM automatically. FTM reports must still describe static shaping
+and a trapezoidal trajectory without additional smoothing. Legacy M593-only
+builds remain supported by software calibration. Applying an FTM axis
+configuration measured in S0 does not activate FTM; results warn about that
+separate operator step.
+
+Software excitation disables the compensators belonging to the active motion
+engine. With S1 it disables M493 compensators. With S0 it instead disables
+the reported M593 shapers, if present, leaving inactive FTM parameters intact.
+Every reported legacy shaper in standard mode needs valid frequency and
+damping backup values. A build without legacy shaping does not receive
+invented M593 commands. Normal restoration rewrites only the changed shaper
+selectors/frequencies; explicit recovery and failed-application rollback also
+restore the saved parameters. Completion, cancellation, analysis failure and
+disconnect/recovery tests cover mixed M493/M593 reports and preserved S0 mode.
 
 | Shaper | FTM `C` ID | Impulses |
 | --- | --- | --- |

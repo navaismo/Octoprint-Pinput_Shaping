@@ -32,11 +32,130 @@ def controller(tmp_path, snapshot, settings, profile, monkeypatch):
 
 
 def run(controller, kind="resonance", **extra):
-    data = dict(axis="X", start_x=110, start_y=110, start_z=10, **extra)
+    data = dict(axis="X", start_x=110, start_y=110, start_z=10)
+    data.update(extra)
     identifier = controller.submit(kind, data)
     controller.thread.join(timeout=10)
     assert not controller.thread.is_alive()
     return identifier
+
+
+@pytest.fixture
+def standard_controller(controller):
+    controller.printer.snapshot.ftm_global["S"] = 0
+    controller.printer.snapshot.legacy_axes = {
+        "X": {"F": 37.0, "D": 0.1}, "Y": {"F": 42.0, "D": 0.07}}
+    return controller
+
+
+@pytest.mark.parametrize("axis", ["X", "Y"])
+@pytest.mark.parametrize("legacy_axes", [(), ("X",), ("X", "Y")])
+def test_software_sweep_in_standard_motion_preserves_mode_and_disables_active_shapers(
+        standard_controller, axis, legacy_axes):
+    controller = standard_controller
+    snapshot = controller.printer.snapshot
+    snapshot.legacy_axes = {key: value for key, value in snapshot.legacy_axes.items() if key in legacy_axes}
+    original = deepcopy(snapshot)
+    measured = []
+    commands = controller.printer.commands
+
+    def check_measurement(batch, **kwargs):
+        if controller.session.stage == "measuring":
+            assert snapshot.ftm_global["S"] == 0
+            assert snapshot.ftm_axes == original.ftm_axes
+            assert all(values["F"] == 0 for values in snapshot.legacy_axes.values())
+            measured.append(True)
+        return commands(batch, **kwargs)
+
+    controller.printer.commands = check_measurement
+    identifier = run(controller, axis=axis)
+    assert controller.error is None
+    assert measured
+    assert original.matches(snapshot)
+    assert controller.result["backend"] == "software"
+    assert set(controller.result["shapers"]) == set(module.SHAPER_IDS)
+    assert any("M493 S0" in warning for warning in controller.result["warnings"])
+    assert not controller.journal.exists()
+    assert not any(cmd.startswith(("M495", "M496")) or cmd.startswith("M493 S1")
+                   for cmd in controller.printer.sent_commands)
+    saved = json.loads((controller.data_folder / "runs" / identifier / "configuration.json").read_text())
+    assert saved["firmware"]["ftm_global"]["S"] == 0
+
+
+def test_standard_motion_software_result_applies_ftm_candidate_without_switching_motion(standard_controller):
+    controller = standard_controller
+    original = deepcopy(controller.printer.snapshot)
+    identifier = run(controller)
+    assert controller.error is None
+    run(controller, "apply", session_id=identifier, shaper="MZV")
+    assert controller.error is None
+    assert controller.printer.snapshot.ftm_global == original.ftm_global
+    assert controller.printer.snapshot.legacy_axes == original.legacy_axes
+    assert controller.printer.snapshot.ftm_axes["X"]["C"] == 8
+    assert controller.printer.snapshot.ftm_axes["Y"] == original.ftm_axes["Y"]
+    assert not controller.journal.exists()
+
+
+def test_cancelled_standard_motion_sweep_restores_both_shaper_families(standard_controller):
+    controller = standard_controller
+    original = deepcopy(controller.printer.snapshot)
+
+    def cancel(event):
+        if event["type"] == "progress":
+            controller.cancel()
+
+    controller._publish_callback = cancel
+    run(controller)
+    assert "cancelled" in controller.error
+    assert original.matches(controller.printer.snapshot)
+    assert not controller.journal.exists()
+    assert controller.result is None
+    assert "M112" not in controller.printer.sent_commands
+
+
+def test_standard_motion_sweep_restores_before_analysis_failure(standard_controller):
+    controller = standard_controller
+    original = deepcopy(controller.printer.snapshot)
+
+    class BrokenAnalyzer(Analyzer):
+        def analyze(self):
+            assert original.matches(controller.printer.snapshot)
+            raise RuntimeError("Analysis failed after standard motion")
+
+    controller.analyzer_factory = BrokenAnalyzer
+    run(controller)
+    assert controller.error == "Analysis failed after standard motion"
+    assert original.matches(controller.printer.snapshot)
+    assert not controller.journal.exists()
+    assert controller.result is None
+
+
+def test_standard_motion_disconnect_keeps_journal_and_explicit_recovery_restores_shapers(standard_controller):
+    controller = standard_controller
+    original = deepcopy(controller.printer.snapshot)
+    controller.printer.fail_on_move = True
+    run(controller)
+    assert controller.error
+    assert controller.journal.exists()
+    assert all(values["F"] == 0 for values in controller.printer.snapshot.legacy_axes.values())
+    controller.printer.fail_on_move = False
+    controller.printer.state = "OPERATIONAL"
+    controller.event("Connected")
+    run(controller, "recover")
+    assert controller.error is None
+    assert original.matches(controller.printer.snapshot)
+    assert not controller.journal.exists()
+
+
+def test_failed_standard_motion_result_application_restores_saved_ftm_and_legacy_parameters(standard_controller):
+    controller = standard_controller
+    original = deepcopy(controller.printer.snapshot)
+    identifier = run(controller)
+    controller.printer.reject_apply = True
+    run(controller, "apply", session_id=identifier)
+    assert "did not confirm" in controller.error
+    assert original.matches(controller.printer.snapshot)
+    assert not controller.journal.exists()
 
 
 def test_complete_session_restores_before_publishing_atomic_result(controller, snapshot):

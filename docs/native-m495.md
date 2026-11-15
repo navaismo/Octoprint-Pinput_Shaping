@@ -15,7 +15,7 @@ API. Selecting a backend never sends printer commands and never causes fallback.
 | `native_analysis.py` | Protocol-2 metadata checks, signal-based sweep isolation, fundamental response and optimizer adapter |
 | `calibration.py` | Backend dispatch, shared session ownership, cache invalidation, saved-setting checks and result/download metadata |
 | `capture.py` | Existing process interface plus host timestamps and acquisition health monitoring during cancellation |
-| `firmware.py` | Permit standard-motion FTM snapshots explicitly for native measurement; retain software-mode requirements |
+| `firmware.py` | Validate FTM/standard-motion snapshots; software excitation preserves the selected engine and restores its shapers |
 | `inputshaping_analyzer.py` | Shared shaper fitting extracted without changing software scoring or firmware coefficients; diagnostic plotting |
 | `__init__.py` | Settings, manual API dispatch and authenticated diagnostic downloads |
 | `static/js/pinput_shaping.js`, both Jinja templates | Backend settings, capability gating, progress, warnings and diagnostic results |
@@ -151,8 +151,9 @@ The operation reserves communication, validates saved settings/profile, reads
 a live snapshot, checks distinct printer/sensor ports and storage, and validates
 the wrapper launch configuration without opening acquisition. Native mode has
 no automatic acquisition precheck. The separate explicit Sensor values action
-remains available. Both FTM and standard-motion snapshots are permitted;
-software measurements retain their existing FTM-active requirement.
+remains available. Both FTM and standard-motion snapshots are permitted.
+Software measurements also support either engine and disable/restore the
+corresponding compensators; native measurements do not modify them.
 
 The sequence is configuration checks → journal → M495 with S W → homing and
 positioning with no acquisition → HOMED / ARMED_WAIT → capture startup and
