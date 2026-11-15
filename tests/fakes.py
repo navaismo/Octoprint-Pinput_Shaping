@@ -72,11 +72,10 @@ class Printer:
                     self.emit(code + " " + " ".join(f"{k}{v}" for k, v in params.items()))
                 if self.snapshot.mode == "ftm":
                     self.emit("M493 " + " ".join(f"{k}{v}" for k, v in self.snapshot.ftm_global.items()))
-                    axes, code = self.snapshot.ftm_axes, "M493"
-                else:
-                    axes, code = self.snapshot.legacy_axes, "M593"
-                for axis, params in axes.items():
-                    self.emit(code + " " + axis + " " + " ".join(f"{k}{v}" for k, v in params.items()))
+                    for axis, params in self.snapshot.ftm_axes.items():
+                        self.emit("M493 " + axis + " " + " ".join(f"{k}{v}" for k, v in params.items()))
+                for axis, params in self.snapshot.legacy_axes.items():
+                    self.emit("M593 " + axis + " " + " ".join(f"{k}{v}" for k, v in params.items()))
             elif cmd == "M493 V":
                 self.emit(f"FTM V{self.snapshot.ftm_version}")
             elif gcode == "M494":

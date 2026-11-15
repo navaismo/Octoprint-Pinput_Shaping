@@ -53,6 +53,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
                 "sweepDuration": 20, "dampingRatio": "0.05",
                 "sensorType": "adxlspi", "sensorAxis": "sum", "sensorPort": "", "adxlRate": 3200, "lis2dwRate": 800,
                 "lis2dwRange": 16,
+                "lcdEnabled": True,
                 "detectedFirmware": None, "detectedNative": None,
                 **NATIVE_DEFAULTS}
 
@@ -68,6 +69,8 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
                 self._settings.set(["lis2dwRange"], 2)
 
     def on_settings_save(self, data):
+        if "lcdEnabled" in data and not isinstance(data["lcdEnabled"], bool):
+            raise ValueError("LCD calibration display must be enabled or disabled")
         data = validate_sensor_settings(data)
         return octoprint.plugin.SettingsPlugin.on_settings_save(self, data)
 
@@ -98,7 +101,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
     def on_after_startup(self):
         self.configure_logger()
         keys = ("accelMin", "accelMax", "freqStart", "freqEnd", "sweepDuration",
-                "dampingRatio", "sensorType", "sensorAxis", "sensorPort", "adxlRate", "lis2dwRate", "lis2dwRange", *NATIVE_DEFAULTS)
+                "dampingRatio", "sensorType", "sensorAxis", "sensorPort", "adxlRate", "lis2dwRate", "lis2dwRange", "lcdEnabled", *NATIVE_DEFAULTS)
         self.controller = CalibrationController(
             self._printer, self._printer_profile_manager.get_current_or_default,
             lambda: {key: self._settings.get([key]) for key in keys},
@@ -177,7 +180,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
         if not re.fullmatch(r"[a-f0-9]{32}", run_id) or filename not in (
                 "signal.png", "psd.png", "capture.csv", "capture.csv.meta.json", "capture.csv.log",
                 "protocol_events.json", "excitation.json", "analysis.json", "configuration.json",
-                "sensor_check.csv", "sensor_check.csv.log", "sensor_check.csv.meta.json"):
+                "sensor_check.csv", "sensor_check.csv.log", "sensor_check.csv.meta.json", "lcd_info.png", "lcd_result.png"):
             flask.abort(404)
         directory = Path(self.get_plugin_data_folder()) / "runs" / run_id
         return flask.send_from_directory(str(directory), filename,
@@ -212,7 +215,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
 
 
 __plugin_pythoncompat__ = ">=3.9,<3.13"
-__plugin_version__ = "0.0.5"
+__plugin_version__ = "0.0.6"
 
 
 def __plugin_load__():

@@ -144,11 +144,13 @@ def test_native_defaults_preserve_software_backend_and_lis800(api):
     assert defaults["excitationBackend"] == "software"
     assert defaults["lis2dwRate"] == 800
     assert defaults["lis2dwRange"] == 16
+    assert defaults["lcdEnabled"] is True
     assert [defaults[key] for key in ("nativeStart", "nativeEnd", "nativeOctave", "nativeAccel")] == [20, 60, 20, 40]
 
 
 @pytest.mark.parametrize("filename", ["capture.csv.meta.json", "capture.csv.log", "protocol_events.json",
-                                     "excitation.json", "analysis.json", "configuration.json", "sensor_check.csv"])
+                                     "excitation.json", "analysis.json", "configuration.json", "sensor_check.csv",
+                                     "lcd_info.png", "lcd_result.png"])
 def test_native_diagnostics_downloads_use_authenticated_whitelisted_route(api, tmp_path, filename):
     app, _ = api
     folder = tmp_path / "runs" / ("a" * 32)
@@ -156,7 +158,7 @@ def test_native_diagnostics_downloads_use_authenticated_whitelisted_route(api, t
     (folder / filename).write_text("{}")
     response = app.test_client().get("/file/" + "a" * 32 + "/" + filename)
     assert response.status_code == 200
-    assert "attachment" in response.headers["Content-Disposition"]
+    assert ("inline" if filename.endswith(".png") else "attachment") in response.headers["Content-Disposition"]
     response.close()
 
 
@@ -207,6 +209,23 @@ def test_accelerometer_range_settings_validate_and_persist(range_settings, full_
     assert plugin._settings.get(["_config_version"]) == 1
     plugin.on_settings_migrate(1, 1)
     assert plugin._settings.get(["lis2dwRange"]) == int(full_scale)
+
+
+@pytest.mark.parametrize("enabled", [True, False])
+def test_lcd_display_setting_persists(range_settings, enabled):
+    plugin, manager = range_settings
+    plugin.on_settings_save({"lcdEnabled": enabled})
+    plugin._settings.save()
+    manager.load()
+    assert plugin._settings.get(["lcdEnabled"]) is enabled
+
+
+@pytest.mark.parametrize("value", ["false", "true", 0, 1, None])
+def test_invalid_lcd_display_setting_is_rejected_without_changing_settings(range_settings, value):
+    plugin, manager = range_settings
+    with pytest.raises(ValueError, match="LCD"):
+        plugin.on_settings_save({"lcdEnabled": value})
+    assert plugin._settings.get(["lcdEnabled"]) is True
 
 
 @pytest.mark.parametrize("value", [True, None, 1, 3, 32, 16.5, "bad", float("nan")])

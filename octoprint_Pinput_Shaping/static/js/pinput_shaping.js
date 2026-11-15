@@ -45,7 +45,7 @@ $(function () {
             Math.round((self.selectedCell().row + 0.5) * self.sizeY() / 3));
 
         const settingKeys = ["accelMin", "accelMax", "freqStart", "freqEnd",
-            "sweepDuration", "dampingRatio", "sensorType", "sensorAxis", "sensorPort", "adxlRate", "lis2dwRate", "lis2dwRange",
+            "sweepDuration", "dampingRatio", "sensorType", "sensorAxis", "sensorPort", "adxlRate", "lis2dwRate", "lis2dwRange", "lcdEnabled",
             "excitationBackend", "nativeStart", "nativeEnd", "nativeOctave", "nativeAccel",
             "nativePrepareTimeout", "nativeMaxCapture", "nativeCancelTimeout"];
         settingKeys.forEach(key => { self[key] = ko.observable(); });

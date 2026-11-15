@@ -31,6 +31,7 @@ The screenshots show the current UI with sample data.
 - [Plugin Installation](#plugin-installation)
 - [Settings](#settings)
 - [Using the Plugin](#using-the-plugin)
+- [Printer LCD Screens](#printer-lcd-screens)
 - [Results](#results)
 - [Errors and Logs](#errors-and-logs)
 - [M495 Communication](#m495-communication)
@@ -54,6 +55,7 @@ The screenshots show the current UI with sample data.
 - Signal and frequency graphs, shaper comparison and downloadable measurements.
 - Apply and read back the selected shaper with `M493`, or ZV with legacy `M593`.
 - Progress stages, error details and logs for each test.
+- Full-screen calibration on the Ender 3 V3 SE with my C13/C14 Zelonaya firmware; M117 information on other firmware.
 
 ## Shaper Algorithms Supported
 
@@ -408,6 +410,15 @@ It does not contain my printer configuration. Do not apply it to c13 again.
 Native calibration needs a `READY:2` reply to `M495 Q2`. Plain upstream M495
 or PIS v1 is not enough. The software-generated backend remains available;
 FTM uses `M493`, while supported legacy builds use ZV through `M593`.
+
+Software tests also work when FTM is compiled but disabled (`M493 S0`).
+The plugin keeps the current motion mode, temporarily disables its reported
+shapers and restores them before analysis. With standard motion, those are
+the legacy `M593` shapers; with FTM active, they are the `M493` compensators.
+You do not need to enable FTM just to run a software test. The existing
+firmware-report, static-frequency and trajectory checks still apply.
+If you later apply an FTM recommendation measured in S0, the result warns
+that activating FTM for printing is a separate step.
 The [firmware contract](docs/firmware-contract.md) lists the reviewed
 configuration and shaper compatibility.
 
@@ -490,6 +501,33 @@ are prepared by the test; there is no separate Prepare button.
 **Cancel Test** requests cancellation and waits for the printer to stop before
 cleanup. **Emergency Stop** sends `M112`; use it when an immediate shutdown
 is needed. Neither button replaces access to the printer's physical stop.
+
+## Printer LCD Screens
+
+**These full-screen displays are only available on the Ender 3 V3 SE with my
+C13 or C14 Zelyonaya firmware from the
+[`c13_pure_octoprint` branch](https://github.com/navaismo/Marlin_bugfix_2.1_E3V3SE/tree/c13_pure_octoprint).**. Use the firmware
+build for your printer's C13 or C14 board.
+
+With **Show calibration on the printer LCD** enabled in Settings, the plugin
+checks for the full-screen M9001 extension when calibration starts. It sends
+the test screen before movement and the result screen after analysis. No
+display updates run during excitation.
+
+| Before the test | After analysis |
+| --- | --- |
+| <img width="240" alt="Ender 3 V3 SE LCD showing the axis, test range, sensor and backend" src="assets/lcd-test-card.png" /> | <img width="240" alt="Ender 3 V3 SE LCD showing the measured spectrum, resonance and recommended shaper" src="assets/lcd-result-card.png" /> |
+
+These examples occupy the entire **240 × 320 LCD**, with the octopus logo and
+no native print card, controls or status bar. The previews use sample data;
+the actual axis, range, sensor, backend, measured spectrum and recommendation
+come from each calibration. Results remain marked **NOT APPLIED**.
+
+**Other firmware receives M117 information messages only**, for the test in
+progress, its result or cancellation. No images are sent unless the firmware
+explicitly confirms our full-screen extension; the original M9001 thumbnail
+protocol alone is not enough. See [LCD calibration](docs/lcd-calibration.md)
+for the protocol details and remaining physical checks.
 
 ## Results
 

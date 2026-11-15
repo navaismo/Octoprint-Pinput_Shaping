@@ -40,11 +40,12 @@ vm.createContext(context);
 vm.runInContext(fs.readFileSync("octoprint_Pinput_Shaping/static/js/pinput_shaping.js", "utf8"), context);
 const settings = {};
 for (const key of ["accelMin", "accelMax", "freqStart", "freqEnd", "sweepDuration", "dampingRatio", "sensorType", "sensorAxis", "sensorPort", "adxlRate", "lis2dwRate", "lis2dwRange",
-    "excitationBackend", "nativeStart", "nativeEnd", "nativeOctave", "nativeAccel", "nativePrepareTimeout", "nativeMaxCapture", "nativeCancelTimeout"]) {
+    "excitationBackend", "nativeStart", "nativeEnd", "nativeOctave", "nativeAccel", "nativePrepareTimeout", "nativeMaxCapture", "nativeCancelTimeout", "lcdEnabled"]) {
     settings[key] = observable(1);
 }
 settings.lis2dwRate(1600);
 settings.lis2dwRange(16);
+settings.lcdEnabled(true);
 const nativeDefaults = {excitationBackend: "software", nativeStart: 20, nativeEnd: 60, nativeOctave: 20,
     nativeAccel: 40, nativePrepareTimeout: 180, nativeMaxCapture: 300, nativeCancelTimeout: 200};
 for (const [key, value] of Object.entries(nativeDefaults)) settings[key](value);
@@ -54,8 +55,11 @@ const model = new Model([{settings: {plugins: {Pinput_Shaping: settings}}},
 model.onStartupComplete();
 assert.equal(model.view(), "setup", "The workspace starts with test preparation");
 assert.equal(model.lis2dwRate(), 1600);
+assert.equal(model.lcdEnabled(), true);
+model.lcdEnabled(false);
 model.lis2dwRate(800);
 model.onSettingsBeforeSave();
+assert.equal(settings.lcdEnabled(), false);
 assert.equal(settings.lis2dwRate(), 800, "The selected sample rate is saved for the next session");
 for (const sensor of ["adxlusb", "adxlspi"]) {
     model.sensorType(sensor);

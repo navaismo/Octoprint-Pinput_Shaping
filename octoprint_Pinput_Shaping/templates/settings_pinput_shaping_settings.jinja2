@@ -109,7 +109,7 @@
                     </div>
                 </div>
             </details>
-        <p class="pinput-help" data-bind="visible: !nativeSelected()">Software excitation varies acceleration over short strokes. Frequencies select the measured analysis range.</p>
+        <p class="pinput-help" data-bind="visible: !nativeSelected()">Software excitation varies acceleration over short strokes using the current motion mode; FTM does not need to be enabled. Frequencies select the measured analysis range.</p>
         <p class="pinput-help" data-bind="visible: nativeSelected">Marlin controls homing, positioning and the sweep. Native calibration requires PIS v2 support.</p>
     </div>
 
@@ -179,6 +179,8 @@
                 <span data-bind="text: nativeCapability().protocol ? '(PIS v' + nativeCapability().protocol + ')' : ''"></span></p>
         </div>
         <p class="pinput-help">Detection saves settings automatically. Native v2 support also selects the native backend.</p>
+        <label class="checkbox"><input type="checkbox" data-bind="checked: lcdEnabled, disable: busy"> Show calibration on the printer LCD</label>
+        <p class="pinput-help">Images require explicit full-screen support from our c13_octoprint_cleanup firmware. Other firmware receives standard M117 information messages. Detection runs when calibration starts; no display updates run during excitation.</p>
         <p class="pinput-help" data-bind="text: nativeCapability().message"></p>
         <div class="alert alert-error" role="alert" data-bind="visible: error, text: error"></div>
         <p class="pinput-help" data-bind="visible: summary, text: summary"></p>

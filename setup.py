@@ -14,7 +14,7 @@ plugin_package = "octoprint_Pinput_Shaping"
 plugin_name = "OctoPrint-Pinput_Shaping"
 
 # The plugin's version. Can be overwritten within OctoPrint's internal data via __plugin_version__ in the plugin module
-plugin_version = "0.0.5"
+plugin_version = "0.0.6"
 
 # The plugin's description. Can be overwritten within OctoPrint's internal data via __plugin_description__ in the plugin
 # module
@@ -33,7 +33,7 @@ plugin_url = "https://github.com/navaismo/OctoPrint-Pinput_Shaping"
 plugin_license = "AGPLv3"
 
 # Any additional requirements besides OctoPrint should be listed here
-plugin_requires = ["numpy", "scipy==1.13.1", "matplotlib==3.9.4", "pandas==2.3.0", "pexpect", "contourpy==1.2.1"]
+plugin_requires = ["numpy", "scipy==1.13.1", "matplotlib==3.9.4", "pandas==2.3.0", "pexpect", "contourpy==1.2.1", "Pillow>=9.2"]
 
 ### --------------------------------------------------------------------------------------------------------------------
 ### More advanced options that you usually shouldn't have to touch follow after this point
