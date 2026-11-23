@@ -175,8 +175,7 @@ def render_screen(settings, axis, result=None, size=(240, 320)):
         _text(draw, (16, 253), "Resonance:", 11)
         _text(draw, (114, 249), resonance, 16, CYAN, True)
         _text(draw, (16, 275), "Shaper:", 11)
-        _text(draw, (82, 272), shaper if valid else "--", 13, CYAN, True)
-        if valid:
-            _center(draw, 291, "@ " + _number(result.get("best_shaper_freq"), " Hz"), 10)
+        recommendation = f"{shaper} @{_number(result.get('best_shaper_freq'), ' Hz')}" if valid else "--"
+        _text(draw, (82, 272), recommendation, 13, CYAN, True)
         _center(draw, 308, "NOT APPLIED", 9, AMBER)
     return image

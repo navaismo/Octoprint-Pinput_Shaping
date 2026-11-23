@@ -206,8 +206,8 @@ def test_accelerometer_range_settings_validate_and_persist(range_settings, full_
     manager.load()
     assert plugin._settings.get(["lis2dwRange"]) == int(full_scale)
     assert plugin._settings.get(["lis2dwRate"]) == 800
-    assert plugin._settings.get(["_config_version"]) == 1
-    plugin.on_settings_migrate(1, 1)
+    assert plugin._settings.get(["_config_version"]) == 2
+    plugin.on_settings_migrate(2, 2)
     assert plugin._settings.get(["lis2dwRange"]) == int(full_scale)
 
 
@@ -254,6 +254,49 @@ def test_range_migration_preserves_existing_configurations(range_settings, saved
         assert plugin._settings.get([key]) == value
 
 
+@pytest.mark.parametrize("previous", [None, "invalid", 42, []])
+def test_detection_migration_replaces_non_dict_reports_without_changing_sensor(range_settings, previous):
+    plugin, manager = range_settings
+    plugin._settings.set([], {"detectedFirmware": previous, "detectedNative": previous,
+                              "sensorType": "lis2dw", "lis2dwRange": 16})
+    plugin.on_settings_migrate(2, 1)
+    plugin._settings.save()
+    manager.load()
+    assert plugin._settings.get(["detectedFirmware"]) == {}
+    assert plugin._settings.get(["detectedNative"]) == {}
+    assert plugin._settings.get(["sensorType"]) == "lis2dw"
+    assert plugin._settings.get(["lis2dwRange"]) == 16
+
+
+def test_detection_reports_survive_save_reload_and_migration_without_settings_warnings(range_settings, caplog):
+    import logging
+    plugin, manager = range_settings
+    plugin._logger = logging.getLogger(__name__)
+    firmware = {"state": "ready", "protocol": "ftm", "allowed_shapers": ["ZV", "EI"]}
+    native = {"state": "supported", "protocol": 2, "command": "M495"}
+    plugin._save_detection("detect", firmware)
+    plugin._save_detection("detect_native", native)
+    plugin.on_settings_migrate(2, 1)
+    plugin.on_settings_save({"sensorType": "lis2dw", "lis2dwRate": 800,
+                             "detectedFirmware": None, "detectedNative": {}})
+    plugin._settings.save()
+    manager.load()
+    assert plugin._settings.get(["detectedFirmware"]) == firmware
+    assert plugin._settings.get(["detectedNative"]) == native
+    assert plugin._settings.get(["excitationBackend"]) == "marlin_m495"
+    assert "non-dict value" not in caplog.text
+    plugin.configure_logger = lambda: None
+    plugin._identifier = "Pinput_Shaping"
+    plugin._plugin_manager = types.SimpleNamespace(send_plugin_message=lambda *args: None)
+    plugin._printer = types.SimpleNamespace(get_state_id=lambda: "OPERATIONAL",
+        get_current_connection=lambda: ("OPERATIONAL", "/dev/fake-printer", 115200, None))
+    plugin.on_after_startup()
+    assert plugin.controller.status()["firmware"]["state"] == "ready"
+    assert plugin.controller.status()["native_capability"]["protocol"] == 2
+    assert plugin.controller.status()["native_capability"]["cached"] is True
+    assert plugin.controller.settings()["excitationBackend"] == "marlin_m495"
+
+
 @pytest.mark.parametrize("sensor", ["adxlspi", "adxlusb", "lis2dw"])
 @pytest.mark.parametrize("axis", ["sum", "x", "y", "z"])
 def test_sensor_configuration_persists_across_driver_changes(range_settings, sensor, axis):
@@ -268,6 +311,52 @@ def test_sensor_configuration_persists_across_driver_changes(range_settings, sen
                            "lis2dwRate": 800, "lis2dwRange": 16,
                            "sensorPort": "/dev/serial/by-id/usb-accelerometer"}.items():
             assert plugin._settings.get([key]) == value
+
+
+@pytest.mark.parametrize("sensor,wrapper", [("lis2dw", "lis2dwusb"), ("adxlusb", "adxl345usb"),
+                                           ("adxlspi", "adxl345spi")])
+def test_fresh_installation_uses_saved_sensor_with_only_its_wrapper_installed(range_settings, tmp_path, monkeypatch,
+                                                                            sensor, wrapper):
+    import logging
+    from octoprint_Pinput_Shaping.calibration import Session
+    from octoprint_Pinput_Shaping import capture as capture_module
+
+    plugin, manager = range_settings
+    plugin.configure_logger = lambda: None
+    plugin._logger = logging.getLogger(__name__)
+    plugin._identifier = "Pinput_Shaping"
+    plugin._plugin_manager = types.SimpleNamespace(send_plugin_message=lambda *args: None)
+    plugin._printer = types.SimpleNamespace(get_state_id=lambda: "OPERATIONAL",
+        get_current_connection=lambda: ("OPERATIONAL", "/dev/fake-printer", 115200, None))
+    plugin.on_after_startup()
+    assert plugin.controller.settings()["sensorType"] == "adxlspi"
+    plugin.on_settings_save({"sensorType": sensor, "sensorAxis": "z", "sensorPort": "/dev/ttyACM0",
+                             "lis2dwRate": 800, "lis2dwRange": 16, "adxlRate": 1600})
+    plugin._settings.save()
+    manager.load()
+
+    queried = []
+    def which(name):
+        queried.append(name)
+        return "/usr/local/bin/" + name if name == wrapper else None
+    monkeypatch.setattr(capture_module.shutil, "which", which)
+    monkeypatch.setattr(capture_module.subprocess, "run", lambda *args, **kwargs:
+                        types.SimpleNamespace(returncode=0, stdout="Usage: lis2dwusb [-r 2|4|8|16]"))
+    settings = plugin.controller.settings()
+    session = Session("sensor", "X", settings, {}, {}, plugin.controller.connection)
+    capture = plugin.controller._capture(session, tmp_path / "sensor_check.csv")
+    executable, arguments = capture.prepare()
+
+    assert settings["sensorType"] == sensor
+    assert capture.driver == wrapper and queried == [wrapper]
+    if sensor == "adxlspi":
+        assert executable == "sudo" and arguments[:2] == ["-n", "/usr/local/bin/"+wrapper]
+    else:
+        assert executable == "/usr/local/bin/" + wrapper
+        assert arguments[:2] == ["-p", "/dev/ttyACM0"]
+    if sensor == "lis2dw":
+        assert arguments[arguments.index("-f")+1] == "800"
+        assert arguments[arguments.index("-r")+1] == "16"
 
 
 @pytest.mark.parametrize("change", [{"sensorType": "unknown"}, {"sensorAxis": "XY"}, {"adxlRate": 400},

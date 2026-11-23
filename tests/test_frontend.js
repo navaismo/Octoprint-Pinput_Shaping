@@ -22,7 +22,8 @@ function response(value) {
 }
 const context = {
     $: fn => fn(), ko: process.env.PINPUT_KNOCKOUT_PATH ? require(process.env.PINPUT_KNOCKOUT_PATH) :
-        {observable, observableArray: observable, pureComputed: fn => fn},
+        {observable, observableArray: observable, pureComputed: fn => typeof fn === "function" ? fn :
+            function (value) { return arguments.length ? fn.write(value) : fn.read(); }},
     OCTOPRINT_VIEWMODELS: [], BASEURL: "/octoprint/", console,
     confirm: message => { confirmations.push(message); return true; }, setInterval() {},
     OctoPrint: {
@@ -41,7 +42,7 @@ vm.runInContext(fs.readFileSync("octoprint_Pinput_Shaping/static/js/pinput_shapi
 const settings = {};
 for (const key of ["accelMin", "accelMax", "freqStart", "freqEnd", "sweepDuration", "dampingRatio", "sensorType", "sensorAxis", "sensorPort", "adxlRate", "lis2dwRate", "lis2dwRange",
     "excitationBackend", "nativeStart", "nativeEnd", "nativeOctave", "nativeAccel", "nativePrepareTimeout", "nativeMaxCapture", "nativeCancelTimeout", "lcdEnabled"]) {
-    settings[key] = observable(1);
+    settings[key] = context.ko.observable(1);
 }
 settings.lis2dwRate(1600);
 settings.lis2dwRange(16);
@@ -50,6 +51,58 @@ const nativeDefaults = {excitationBackend: "software", nativeStart: 20, nativeEn
     nativeAccel: 40, nativePrepareTimeout: 180, nativeMaxCapture: 300, nativeCancelTimeout: 200};
 for (const [key, value] of Object.entries(nativeDefaults)) settings[key](value);
 const Model = context.OCTOPRINT_VIEWMODELS[0].construct;
+
+// A new installation must use the selected USB driver even when SPI is the
+// saved default. The settings dialog and the main tab share the same values.
+function testFreshSensorSelection() {
+    const values = {...nativeDefaults, accelMin: 300, accelMax: 2500, freqStart: 5, freqEnd: 132,
+        sweepDuration: 20, dampingRatio: "0.05", sensorType: "adxlspi", sensorAxis: "sum",
+        sensorPort: "", adxlRate: 3200, lis2dwRate: 800, lis2dwRange: 16, lcdEnabled: true};
+    const freshSettings = Object.fromEntries(Object.entries(values).map(([key, value]) =>
+        [key, context.ko.observable(value)]));
+    const fresh = new Model([{settings: {plugins: {Pinput_Shaping: freshSettings}}},
+        {isOperational: () => true, isPrinting: () => false}]);
+    fresh.onStartupComplete();
+    fresh.sensorType("lis2dw");
+    fresh.sensorPort("/dev/serial/by-id/usb-LIS2DW");
+    assert.equal(freshSettings.sensorType(), "lis2dw", "Settings Save must see the displayed sensor directly");
+    freshSettings.sensorType("adxlusb");
+    assert.equal(fresh.sensorType(), "adxlusb", "Reloaded server settings update the displayed sensor");
+    fresh.sensorType("lis2dw");
+    const save = context.OctoPrint.settings.save, request = context.OctoPrint.simpleApiCommand;
+    let done, fail, saved, launches = 0;
+    context.OctoPrint.settings.save = data => {
+        saved = data.plugins.Pinput_Shaping;
+        return {done(fn) { done = fn; return this; }, fail(fn) { fail = fn; return this; }};
+    };
+    context.OctoPrint.simpleApiCommand = (plugin, command) => {
+        assert.equal(command, "run_accelerometer_test");
+        assert.equal(saved.sensorType, "lis2dw");
+        assert.equal(saved.sensorPort, "/dev/serial/by-id/usb-LIS2DW");
+        assert.equal(saved.lis2dwRate, 800);
+        assert.equal(saved.lis2dwRange, 16);
+        launches++;
+        return response({success: true});
+    };
+    try {
+        fresh.runAccTest();
+        assert.equal(launches, 0, "Acquisition waits until settings have been saved");
+        assert.equal(fresh.savingSettings(), true);
+        fresh.runAccTest();
+        done({});
+        assert.equal(launches, 1, "One successful save launches one sensor check");
+        fresh.busy(false);
+        fresh.runAccTest();
+        fail({responseJSON: {error: "Settings could not be saved"}});
+        assert.equal(launches, 1, "A failed save must not start acquisition with old settings");
+        assert.equal(fresh.error(), "Settings could not be saved");
+    } finally {
+        context.OctoPrint.settings.save = save;
+        context.OctoPrint.simpleApiCommand = request;
+    }
+}
+testFreshSensorSelection();
+
 const model = new Model([{settings: {plugins: {Pinput_Shaping: settings}}},
     {isOperational: () => true, isPrinting: () => false}]);
 model.onStartupComplete();

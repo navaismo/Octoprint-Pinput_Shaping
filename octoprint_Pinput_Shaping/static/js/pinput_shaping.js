@@ -48,7 +48,20 @@ $(function () {
             "sweepDuration", "dampingRatio", "sensorType", "sensorAxis", "sensorPort", "adxlRate", "lis2dwRate", "lis2dwRange", "lcdEnabled",
             "excitationBackend", "nativeStart", "nativeEnd", "nativeOctave", "nativeAccel",
             "nativePrepareTimeout", "nativeMaxCapture", "nativeCancelTimeout"];
-        settingKeys.forEach(key => { self[key] = ko.observable(); });
+        settingKeys.forEach(key => {
+            // Share OctoPrint's settings instead of keeping an independent copy
+            // that can diverge after saving, cancelling or reloading the dialog.
+            self[key] = ko.pureComputed({
+                read: function () {
+                    const settings = self.settingsViewModel.settings.plugins.Pinput_Shaping;
+                    return settings[key]();
+                },
+                write: function (value) {
+                    const settings = self.settingsViewModel.settings.plugins.Pinput_Shaping;
+                    settings[key](value);
+                }
+            });
+        });
 
         self.number = function (value, digits) {
             return Number.isFinite(value) ? value.toFixed(digits === undefined ? 1 : digits) : "—";
@@ -454,7 +467,7 @@ $(function () {
         }
 
         self.runAccTest = function () {
-            if (self.available()) request("run_accelerometer_test", {}, true);
+            return saveAndRequest("run_accelerometer_test", {}, true);
         };
         function applySavedSettings(values) {
             const settings = self.settingsViewModel.settings.plugins.Pinput_Shaping;
@@ -464,7 +477,7 @@ $(function () {
             });
         }
 
-        function detectAndSave(command) {
+        function saveAndRequest(command, payload, clearResult) {
             if (!self.available()) return;
             const values = {};
             settingKeys.forEach(key => { values[key] = self[key](); });
@@ -472,20 +485,20 @@ $(function () {
             self.savingSettings(true);
             self.stage("saving plugin settings");
             setError("");
-            // Save only this plugin's displayed settings before freezing a
-            // detection session; unrelated settings in the dialog stay untouched.
+            // Save only this plugin's displayed settings before freezing the
+            // session; unrelated settings in the dialog stay untouched.
             return OctoPrint.settings.save({plugins: {Pinput_Shaping: values}}).done(function () {
                 applySavedSettings(values);
                 self.savingSettings(false);
                 self.busy(false);
-                request(command, {}, false);
+                request(command, payload, clearResult);
             }).fail(function (response) {
                 self.savingSettings(false);
                 failure(response);
             });
         }
-        self.detectFirmware = function () { return detectAndSave("detect_firmware"); };
-        self.detectM495 = function () { return detectAndSave("detect_m495"); };
+        self.detectFirmware = function () { return saveAndRequest("detect_firmware", {}, false); };
+        self.detectM495 = function () { return saveAndRequest("detect_m495", {}, false); };
         self.runAxisTest = function (axis) {
             if (self.canMove()) request("run_axis_test", position(axis), true);
         };

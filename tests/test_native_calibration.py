@@ -252,14 +252,16 @@ def test_unsaved_backend_or_native_parameters_are_rejected_before_motion(native,
     assert native.printer.sent_commands == []
 
 
-def test_detected_native_capability_is_invalidated_by_reconnect_and_identity_change(native):
+def test_detected_native_capability_is_restored_on_reconnect_but_invalidated_by_identity_change(native):
     detect(native)
     native.event("Connected")
-    assert native.native_capability["state"] == "unknown"
+    assert native.native_capability["state"] == "supported"
+    assert native.native_capability["cached"] is True
     detect(native)
     native.receive("FIRMWARE_NAME:old")
     native.receive("FIRMWARE_NAME:new")
     assert native.native_capability["state"] == "unknown"
+    assert native.status()["native_capability"]["state"] == "unknown"
 
 
 @pytest.mark.parametrize("scenario", ["success", "delayed", "slow_start", "duplicate_ack"])
@@ -521,7 +523,8 @@ def test_cancelled_or_reconnected_session_discards_queued_arm(native):
     native.printer.state = "OPERATIONAL"
     native.event("Connected")
     assert native.sending(f"M495 I{native.native_id} R", "M495", tags) == (None,)
-    assert native.native_capability["state"] == "unknown"
+    assert native.native_capability["state"] == "supported"
+    assert native.native_capability["cached"] is True
 
 
 def test_health_is_rechecked_immediately_before_arm(native):
@@ -596,6 +599,6 @@ def test_manual_native_detection_persists_result_and_backend_notification(native
     saved = []
     native.persist_detection = lambda kind, report: saved.append((kind, report)) or {"excitationBackend": "marlin_m495"}
     detect(native)
-    assert saved == [("detect_native", native.native_capability)]
+    assert saved == [("detect_native", {**native.native_capability, "context": native._detection_context()})]
     assert any(event["type"] == "detection_saved" and event["settings"]["excitationBackend"] == "marlin_m495"
                for event in native.events)

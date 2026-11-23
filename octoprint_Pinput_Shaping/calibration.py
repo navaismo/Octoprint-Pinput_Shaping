@@ -63,7 +63,8 @@ class Session:
 
 class CalibrationController(NativeResonanceMixin, CalibrationLCDMixin):
     def __init__(self, printer, profile, settings, data_folder, publish,
-                 logger=None, capture_factory=AccelerometerCapture, analyzer_factory=None, persist_detection=None):
+                 logger=None, capture_factory=AccelerometerCapture, analyzer_factory=None, persist_detection=None,
+                 saved_detection=None):
         self.printer = printer
         self.profile = profile
         self.settings = settings
@@ -73,6 +74,7 @@ class CalibrationController(NativeResonanceMixin, CalibrationLCDMixin):
         self.capture_factory = capture_factory
         self.analyzer_factory = analyzer_factory
         self.persist_detection = persist_detection
+        self._saved_detection = deepcopy(saved_detection or {})
         self.lock = threading.RLock()
         self.inbox = queue.Queue(maxsize=8192)
         self.session = None
@@ -95,6 +97,53 @@ class CalibrationController(NativeResonanceMixin, CalibrationLCDMixin):
                     self.native_unresolved = json.load(stream).get("native_only", False)
             except (OSError, ValueError):
                 self.native_unresolved = True
+        self._restore_detection()
+
+    def _detection_context(self):
+        connection = self.printer.get_current_connection()
+        return {"profile_id": self.profile().get("id"), "port": connection[1],
+                "baudrate": connection[2], "firmware_identity": self._firmware_identity}
+
+    def _restore_detection(self):
+        # No probes, disk access or motion from status/connection callbacks.
+        if not self._saved_detection or self.session or self.printer.get_state_id() != "OPERATIONAL":
+            return
+        context = self._detection_context()
+        if not context["port"]:
+            return
+        for key, attribute in (("detectedFirmware", "firmware"), ("detectedNative", "native_capability")):
+            if getattr(self, attribute)["state"] != "unknown":
+                continue
+            report = self._saved_detection.get(key)
+            if not isinstance(report, dict):
+                continue
+            saved_context = report.get("context")
+            # Older saved reports have no context. Their native capability is
+            # rechecked on explicit calibration, just like a scoped report.
+            if saved_context is not None:
+                if not isinstance(saved_context, dict) or any(
+                        saved_context.get(name) != context[name] for name in ("profile_id", "port", "baudrate")):
+                    continue
+                identity = saved_context.get("firmware_identity")
+                if identity and context["firmware_identity"] and identity != context["firmware_identity"]:
+                    continue
+            restored = {**deepcopy(report), "cached": True}
+            if key == "detectedFirmware":
+                if report.get("state") != "ready" or report.get("protocol") not in ("ftm", "legacy"):
+                    continue
+                restored["allowed_shapers"] = list(SHAPER_IDS) if report["protocol"] == "ftm" else ["ZV"]
+                restored.setdefault("label", "FTM (M493)" if report["protocol"] == "ftm" else "Legacy ZV (M593)")
+                restored["message"] = "Saved firmware detection; live settings are read before calibration."
+            else:
+                if (report.get("state"), report.get("protocol")) not in (("supported", 2), ("legacy", 1)):
+                    continue
+                restored["message"] = ("Saved PIS:RT v2; support will be verified before calibration."
+                                       if report["protocol"] == 2 else "Saved PIS:RT v1; native calibration requires v2.")
+                self.native_connection = (context["port"], context["baudrate"])
+            if saved_context is None:
+                self._saved_detection[key] = {**report, "context": deepcopy(context)}
+            restored["context"] = deepcopy(self._saved_detection[key]["context"])
+            setattr(self, attribute, restored)
 
     @staticmethod
     def _unknown_firmware():
@@ -112,6 +161,7 @@ class CalibrationController(NativeResonanceMixin, CalibrationLCDMixin):
             ftm_label = f"FTM v{snapshot.ftm_version} (M493)" if snapshot and snapshot.ftm_version else "FTM (M493)"
             label = {"ftm": ftm_label, "legacy": "Legacy ZV (M593)"}.get(protocol, "Not detected")
             if self.firmware["protocol"] is not None and (protocol, label) != (self.firmware["protocol"], self.firmware["label"]):
+                self._saved_detection.clear()
                 self.native_capability = self._unknown_native("Firmware identification changed; detect M495 again.")
                 self.native_connection = None
             self.firmware = {
@@ -131,12 +181,21 @@ class CalibrationController(NativeResonanceMixin, CalibrationLCDMixin):
 
     def status(self):
         with self.lock:
+            context = self._detection_context()
+            for attribute in ("firmware", "native_capability"):
+                report = getattr(self, attribute)
+                if report.get("cached") and any(report["context"].get(name) != context[name]
+                                                for name in ("profile_id", "port", "baudrate")):
+                    setattr(self, attribute, self._unknown_firmware() if attribute == "firmware" else self._unknown_native())
+                    if attribute == "native_capability":
+                        self.native_connection = None
             if self.native_connection and self.native_connection != tuple(self.printer.get_current_connection()[1:3]):
                 self.native_capability = self._unknown_native("Printer transport changed; detect again.")
                 self.native_connection = None
                 if self.result and self.result.get("backend") == "marlin_m495":
                     self.result = None
                 self.cancel("Printer transport changed during calibration")
+            self._restore_detection()
             return {"busy": self.session is not None,
                     "session_id": self.session.id if self.session else None,
                     "stage": self.session.stage if self.session else "idle",
@@ -160,6 +219,7 @@ class CalibrationController(NativeResonanceMixin, CalibrationLCDMixin):
                 raise RuntimeError("The printer must be connected and idle")
             if self.journal.exists() and kind != "recover":
                 raise RuntimeError("Restore the interrupted calibration before starting another operation")
+            self.status()
             if kind == "apply" and self.modes["units"] != "G21":
                 raise RuntimeError("Prepare millimeter coordinate modes before calibration")
             settings, profile = deepcopy(self.settings()), deepcopy(self.profile())
@@ -231,7 +291,14 @@ class CalibrationController(NativeResonanceMixin, CalibrationLCDMixin):
         """Non-blocking serial callback: no file, process, or analysis work."""
         if line.startswith(("FIRMWARE_NAME:", "echo:FIRMWARE_NAME:")):
             identity = line.strip()
-            if self._firmware_identity is not None and identity != self._firmware_identity:
+            saved_identities = [report["context"].get("firmware_identity")
+                                for report in self._saved_detection.values()
+                                if isinstance(report, dict) and isinstance(report.get("context"), dict)
+                                and isinstance(report["context"].get("firmware_identity"), str)]
+            if ((self._firmware_identity is not None and identity != self._firmware_identity)
+                    or any(saved != identity for saved in saved_identities)):
+                self._saved_detection.clear()
+                self.firmware = self._unknown_firmware()
                 self.native_capability = self._unknown_native("Firmware identity changed; detect again.")
                 self.native_connection = None
                 self.result = None
@@ -450,6 +517,12 @@ class CalibrationController(NativeResonanceMixin, CalibrationLCDMixin):
         options = {"lis2dw_rate": session.settings.get("lis2dwRate", 800),
                    "lis2dw_range": session.settings.get("lis2dwRange", 2)} if sensor == "lis2dw" else {
                        "adxl_rate": session.settings.get("adxlRate", 3200)}
+        self.logger.info("Calibration session %s sensor configuration: sensor=%s, wrapper=%s, port=%s, "
+                         "requested rate=%s Hz, range=%s", session.id, sensor,
+                         AccelerometerCapture.DRIVERS.get(sensor, ("unknown",))[0],
+                         port if sensor != "adxlspi" else "SPI",
+                         options.get("lis2dw_rate", options.get("adxl_rate")),
+                         options.get("lis2dw_range", "fixed +/-16 g"))
         return self.capture_factory(sensor, path, check_cancel=lambda: self._check(session), port=port, **options)
 
     def _analyzer(self, session, path):
@@ -632,18 +705,24 @@ class CalibrationController(NativeResonanceMixin, CalibrationLCDMixin):
         for warning in result.get("warnings", []):
             self.logger.warning("%s analysis warning: %s", context, warning)
 
-    def _persist_detection(self, session):
-        if self.persist_detection is None:
-            return
+    def _persist_detection(self, session, kind=None):
         self._check(session)
-        result = self.native_capability if session.kind == "detect_native" else self.firmware
+        kind = kind or session.kind
+        key = "detectedNative" if kind == "detect_native" else "detectedFirmware"
+        result = self.native_capability if kind == "detect_native" else self.firmware
         if self.error or result["state"] in ("unknown", "detecting", "error", "timeout"):
             return
+        report = {**deepcopy(result), "context": self._detection_context()}
+        report.pop("cached", None)
+        if self.persist_detection is None:
+            self._saved_detection[key] = report
+            return
         try:
-            changes = self.persist_detection(session.kind, deepcopy(result))
+            changes = self.persist_detection(kind, report)
         except Exception as exc:
             self.error = f"Could not save detection settings: {exc}"
             raise
+        self._saved_detection[key] = report
         self.publish({"type": "detection_saved", "settings": changes,
                       "message": "Detection complete; plugin settings saved."})
 
@@ -738,6 +817,11 @@ class CalibrationController(NativeResonanceMixin, CalibrationLCDMixin):
                     self._recover_native(session, json.load(stream))
                 self.publish({"type": "completed", "message": "Native stop and printer settings verified. Coordinate modes will be prepared with the next calibration."})
             else:
+                if session.native_mode and session.kind == "resonance" and self.native_capability.get("cached"):
+                    self._detect_native(session)
+                    if self.native_capability["state"] != "supported" or self.native_capability.get("protocol") != 2:
+                        raise RuntimeError("Saved Native M495 support could not be confirmed: " + self.native_capability["message"])
+                    self._persist_detection(session, "detect_native")
                 if session.kind in ("axis", "resonance"):
                     self._prepare_motion_modes(session)
                 session.snapshot = self._snapshot(session)

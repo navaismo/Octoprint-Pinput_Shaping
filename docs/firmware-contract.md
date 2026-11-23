@@ -106,12 +106,19 @@ start probes, and failed or interrupted detection never schedules a retry.
 Connection scripts and external commands take precedence over detection;
 the operator can request another check when the printer is idle again.
 The tab exposes detection state, protocol and permitted shaper candidates.
-Disconnects clear the cached protocol and result, requiring a new request.
+Disconnects clear the live protocol and result. Saved detection reports are
+restored for the same profile ID, port and baud rate without sending commands.
 No detection probe homes, moves, changes coordinate modes or writes printer
 settings. The buttons save the displayed plugin settings before probing and
 persist the completed detection report afterward. Explicit native v2 detection
-also selects and saves the native backend. Persisted detection reports are
-informational; fresh live detection is still required after reconnect.
+also selects and saves the native backend. The first explicitly requested
+native calibration after reconnect/restart verifies the restored report with
+fenced read-only M495 Q/Q2 queries before preparing motion or starting capture.
+A missing, v1 or invalid response stops the operation without excitation or an
+automatic retry. Later measurements reuse the verified capability on that
+connection. Changed printer targets or observed firmware identities invalidate
+the cached reports. Existing saved reports without context require the same
+verification and acquire a target context when restored.
 Explicit calibration, application and recovery operations still read fresh
 settings as part of their validation and restoration; cached detection cannot
 replace those checks.

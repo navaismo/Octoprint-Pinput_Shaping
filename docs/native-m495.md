@@ -103,10 +103,20 @@ only this plugin's displayed editable settings, and do not probe if that save
 fails. A completed manual detection persists `detectedFirmware` or
 `detectedNative`; confirmed v2 also selects and saves `excitationBackend` as
 `marlin_m495`, notifying all connected frontends. Persisted reports are
-informational and cannot authorize calibration after restarting/reconnecting.
+restored after restarting/reconnecting for the same profile ID, port and baud
+rate. Reports include this target context and the firmware identity when it
+has been observed. Existing reports without context remain usable, but are
+bound to the current target and require the same live verification.
 
-Reconnect, changed port/baud and changed firmware identification invalidate
-the capability. There are no automatic retries.
+Restoring a report does not send commands. On the first explicitly requested
+native calibration after reconnect/restart, the worker repeats the fenced
+read-only Q/Q2 queries before coordinate preparation, capture or excitation.
+Only a confirmed READY:2 allows the test to continue. Failure releases the
+communication hold and reports an error without starting capture or motion;
+there are no automatic retries. Later measurements on the same connection
+reuse the live capability. A changed target or observed firmware identity
+invalidates the cached detection. Results and queued ARM commands still
+expire across reconnects; recovery and all fresh snapshot checks are unchanged.
 
 Instrumented example:
 
