@@ -390,9 +390,14 @@ must be enabled in the firmware you actually install; having the source on
 that branch is not enough. `PINPUT_RESONANCE_PROGRESS` is optional.
 
 After installing the firmware, use **Detect Firmware**, then **Detect Native
-M495** in the plugin. Detection runs only when you press the buttons and saves
-the result in Settings. Detecting v2 also selects and saves **Native Marlin
-(M495)** as the backend. Repeat detection after reconnecting the printer.
+M495** in the plugin once, with the printer connected and idle. The buttons
+save the result in Settings. Detecting v2 also selects and saves **Native Marlin
+(M495)** as the backend. These detections survive reconnects and OctoPrint
+restarts for the same printer profile, serial port and baud rate. You do not
+need to press the buttons for each measurement. The first native calibration
+after reconnecting verifies PIS v2 before preparing motion or starting the
+sensor; later measurements on that connection reuse the verified support.
+Changing the printer target or firmware identity requires a new detection.
 
 During a native calibration, Marlin homes and chooses its own XY position
 and Z height. The plugin's position controls are disabled. The sensor starts
@@ -475,7 +480,9 @@ profile if the displayed dimensions are wrong.
 2. Press **Detect Firmware**, then **Detect Native M495**. The header shows
    the detected firmware, native support, sensor and selected backend.
 3. Use **Sensor Values** for a short stationary capture. It shows the first
-   five samples and the captured sample count below **Test Progress**.
+   five samples and the captured sample count below **Test Progress**. The button
+   saves the current plugin settings before reading the selected sensor; a failed
+   save does not start acquisition with the previous configuration.
 4. Press **Calibrate X** or **Calibrate Y** and confirm the movement. In native
    mode, Marlin controls homing and test position. In software mode, choose a
    numbered grid cell and Z height first; use at least 10 mm of clearance.

@@ -54,29 +54,36 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
                 "sensorType": "adxlspi", "sensorAxis": "sum", "sensorPort": "", "adxlRate": 3200, "lis2dwRate": 800,
                 "lis2dwRange": 16,
                 "lcdEnabled": True,
-                "detectedFirmware": None, "detectedNative": None,
+                "detectedFirmware": {}, "detectedNative": {},
                 **NATIVE_DEFAULTS}
 
     def get_settings_version(self):
-        return 1
+        return 2
 
     def on_settings_migrate(self, target, current):
+        saved = self._settings.get_all_data(merged=False) or {}
         if current is None or current < 1:
-            saved = self._settings.get_all_data(merged=False) or {}
             # Preserve the former fixed range for existing saved configurations.
             # A new configuration uses the default; explicit ranges are retained.
             if "lis2dwRange" not in saved and any(not key.startswith("_") for key in saved):
                 self._settings.set(["lis2dwRange"], 2)
+        if current is None or current < 2:
+            for key in ("detectedFirmware", "detectedNative"):
+                if key in saved and not isinstance(saved[key], dict):
+                    self._settings.remove([key])
 
     def on_settings_save(self, data):
+        # Detection reports belong to the worker. An older settings dialog
+        # must not overwrite them with a stale or empty copy when saving.
+        data = {key: value for key, value in data.items() if key not in ("detectedFirmware", "detectedNative")}
         if "lcdEnabled" in data and not isinstance(data["lcdEnabled"], bool):
             raise ValueError("LCD calibration display must be enabled or disabled")
         data = validate_sensor_settings(data)
         return octoprint.plugin.SettingsPlugin.on_settings_save(self, data)
 
     def _save_detection(self, kind, result):
-        # Saved detection reports are informational; live capabilities still
-        # expire on reconnect and are never restored from these settings.
+        # Restored native reports require a fresh query before the first
+        # calibration on a new connection; saved settings never authorize ARM.
         key = "detectedNative" if kind == "detect_native" else "detectedFirmware"
         changes = {key: result}
         if kind == "detect_native" and result.get("state") == "supported" and result.get("protocol") == 2:
@@ -109,6 +116,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
             lambda payload: self._plugin_manager.send_plugin_message(self._identifier, payload),
             logger=self._logger,
             persist_detection=self._save_detection,
+            saved_detection={key: self._settings.get([key]) for key in ("detectedFirmware", "detectedNative")},
         )
         self._logger.info("Input shaping ready; firmware detection is available on demand")
 
@@ -215,7 +223,7 @@ class PinputShapingPlugin(octoprint.plugin.StartupPlugin,
 
 
 __plugin_pythoncompat__ = ">=3.9,<3.13"
-__plugin_version__ = "0.0.6"
+__plugin_version__ = "0.0.7"
 
 
 def __plugin_load__():

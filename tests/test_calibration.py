@@ -709,7 +709,7 @@ def test_requested_legacy_detection_only_enables_zv(controller):
     assert not any(cmd.startswith(("M493", "M494", "M593")) for cmd in controller.printer.sent_commands)
 
 
-def test_detection_requires_idle_and_a_new_request_after_reconnecting(controller):
+def test_detection_requires_idle_and_restores_its_report_after_reconnecting(controller):
     controller.printer.state = "PRINTING"
     controller.event("Connected")
     with pytest.raises(RuntimeError, match="connected and idle"):
@@ -731,9 +731,8 @@ def test_detection_requires_idle_and_a_new_request_after_reconnecting(controller
     controller.event("Connected")
     assert controller.thread is thread
     assert controller.printer.sent_commands == commands
-    assert controller.status()["firmware"]["state"] == "unknown"
-    run(controller, "detect")
     assert controller.status()["firmware"]["state"] == "ready"
+    assert controller.status()["firmware"]["cached"] is True
 
 
 @pytest.mark.parametrize("field,value", [("ftm_version", 1), ("trajectory", 2)])
@@ -899,14 +898,15 @@ def test_failed_manual_application_rolls_back_original_settings(controller, snap
     assert not any(e["type"] == "applied" for e in controller.events)
 
 
-def test_manual_firmware_detection_persists_and_notifies_without_restoring_trust_on_reconnect(controller):
+def test_manual_firmware_detection_persists_and_restores_display_on_reconnect(controller):
     saved = []
     controller.persist_detection = lambda kind, result: saved.append((kind, result)) or {"detectedFirmware": result}
     run(controller, "detect")
     assert saved[0][0] == "detect" and saved[0][1]["state"] == "ready"
     assert any(event["type"] == "detection_saved" for event in controller.events)
     controller.event("Connected")
-    assert controller.status()["firmware"]["state"] == "unknown"
+    assert controller.status()["firmware"]["state"] == "ready"
+    assert controller.status()["firmware"]["cached"] is True
     assert len(saved) == 1
 
 
